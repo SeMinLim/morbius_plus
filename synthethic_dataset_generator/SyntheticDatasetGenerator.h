@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <fstream>
 #include <random>
 #include <string>
 #include <vector>
@@ -11,7 +12,6 @@
 #define DNA_SEQUENCE_LENGTH 1000
 #define PROTEIN_SEQUENCE_LENGTH 300
 #define DATASET_NUM 3
-#define AMINO_ACID_NUM 20
 #define FASTA_LINE_WIDTH 0
 
 
@@ -35,9 +35,6 @@ typedef struct FastaRecord {
 }FastaRecord;
 
 
-extern const char AMINO_ACID_TABLE[AMINO_ACID_NUM + 1];
-
-
 double timeChecker( void );
 void printUsage( const char *programName );
 void parseArguments( int argc, char **argv, Config *config );
@@ -51,24 +48,24 @@ size_t validateBindingSites( std::vector<FastaRecord> &bindingSites );
 void buildBackgroundPool( const std::vector<FastaRecord> &inputRecords,
 			  std::vector<std::string> &backgroundPool );
 char translateCodon( char base0, char base1, char base2 );
-std::string translateBindingSite( const std::string &bindingSite );
-void buildProteinMotifs( const std::vector<FastaRecord> &bindingSites,
-			 std::vector<std::string> &proteinMotifs );
+void translateDNASequence( const std::string &dnaSequence,
+			   uint64_t implantedOffset,
+			   uint64_t implantedLength,
+			   std::string &proteinSequence,
+			   int64_t *translatedOffset,
+			   std::string &translatedSequence );
 void buildDatasetSpecs( bool testMode, DatasetSpec specs[DATASET_NUM] );
 void selectUniqueIndices( uint64_t sourceNum,
 			  uint64_t selectedNum,
 			  std::mt19937_64 &randomGenerator,
 			  std::vector<uint32_t> &selectedIndices );
 
-void generateProteinBackground( std::mt19937_64 &randomGenerator,
-				std::string &sequence );
 void writeFASTARecord( std::ofstream &output,
 		       uint64_t sequenceID,
 		       const std::string &sequence );
 void generateDatasetPair( const Config *config,
 			  const DatasetSpec *spec,
 			  const std::vector<std::string> &backgroundPool,
-			  const std::vector<FastaRecord> &bindingSites,
-			  const std::vector<std::string> &proteinMotifs );
+			  const std::vector<FastaRecord> &bindingSites );
 
 #endif
