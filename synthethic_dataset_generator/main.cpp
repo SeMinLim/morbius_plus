@@ -41,7 +41,7 @@ int main( int argc, char **argv ) {
 
 	//--------------------------------------------------------------------------------------------
 	// [STEP 2]
-	// Prepare the background and protein-motif pools
+	// Prepare the DNA background pool
 	//--------------------------------------------------------------------------------------------
 	printf( "[STEP 2] Preparing source pools started!\n" );
 	printf( "---------------------------------------------------------------------\n" );
@@ -49,9 +49,7 @@ int main( int argc, char **argv ) {
 
 	double poolStart = timeChecker();
 	vector<string> backgroundPool;
-	vector<string> proteinMotifs;
 	buildBackgroundPool(backgroundRecords, backgroundPool);
-	buildProteinMotifs(bindingSites, proteinMotifs);
 	double poolFinish = timeChecker();
 
 	DatasetSpec specs[DATASET_NUM];
@@ -75,14 +73,13 @@ int main( int argc, char **argv ) {
 
 	printf( "[STEP 2] Preparing source pools is done!\n" );
 	printf( "1000-Base Backgrounds  : %lu\n", (unsigned long)backgroundPool.size() );
-	printf( "Protein Motif Length   : %lu\n", (unsigned long)proteinMotifs[0].size() );
 	printf( "Elapsed Time           : %.8f sec\n", poolFinish - poolStart );
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
 
 	//--------------------------------------------------------------------------------------------
 	// [STEP 3]
-	// Generate DNA1-3, Protein1-3, and exact ground truth
+	// Generate DNA1-3, codon-translated Protein1-3, and exact ground truth
 	//--------------------------------------------------------------------------------------------
 	printf( "[STEP 3] Synthetic dataset generation started!\n" );
 	printf( "---------------------------------------------------------------------\n" );
@@ -93,8 +90,7 @@ int main( int argc, char **argv ) {
 		generateDatasetPair(&config,
 				    &specs[datasetIdx],
 				    backgroundPool,
-				    bindingSites,
-				    proteinMotifs);
+				    bindingSites);
 	}
 	double generationFinish = timeChecker();
 

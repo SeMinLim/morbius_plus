@@ -10,18 +10,6 @@
 using namespace std;
 
 
-const char AMINO_ACID_TABLE[AMINO_ACID_NUM + 1] = "ACDEFGHIKLMNPQRSTVWY";
-
-
-// Generate a uniformly random protein background
-void generateProteinBackground( mt19937_64 &randomGenerator, string &sequence ) {
-	uniform_int_distribution<int> aminoAcidDistribution(0, AMINO_ACID_NUM - 1);
-	sequence.resize(PROTEIN_SEQUENCE_LENGTH);
-	for ( size_t position = 0; position < PROTEIN_SEQUENCE_LENGTH; position ++ ) {
-		sequence[position] = AMINO_ACID_TABLE[aminoAcidDistribution(randomGenerator)];
-	}
-}
-
 // Write one FASTA record
 void writeFASTARecord( ofstream &output, uint64_t sequenceID, const string &sequence ) {
 	output << ">" << sequenceID << "\n";
@@ -34,12 +22,11 @@ void writeFASTARecord( ofstream &output, uint64_t sequenceID, const string &sequ
 	}
 }
 
-// Generate one DNA and protein dataset pair
+// Generate one DNA dataset and its codon-translated protein dataset
 void generateDatasetPair( const Config *config,
 			  const DatasetSpec *spec,
 			  const vector<string> &backgroundPool,
-			  const vector<FastaRecord> &bindingSites,
-			  const vector<string> &proteinMotifs ) {
+			  const vector<FastaRecord> &bindingSites ) {
 	uint64_t datasetSeed = config->randomSeed ^
 			       ((uint64_t)spec->datasetID * 0x9e3779b97f4a7c15ULL);
 	mt19937_64 randomGenerator(datasetSeed);
@@ -78,7 +65,7 @@ void generateDatasetPair( const Config *config,
 	}
 
 	dnaGroundTruthOutput << "sequence_id\tbackground_id\tbinding_site_id\timplanted_offset\timplanted_length\timplanted_sequence\n";
-	proteinGroundTruthOutput << "sequence_id\tbinding_site_id\timplanted_offset\timplanted_length\timplanted_sequence\n";
+	proteinGroundTruthOutput << "sequence_id\tbinding_site_id\tsource_dna_offset\tsource_dna_length\ttranslated_offset\ttranslated_length\ttranslated_sequence\n";
 
 	uniform_int_distribution<uint64_t> motifPoolDistribution(0, spec->motifPoolNum - 1);
 	uint64_t progressInterval = spec->sequenceNum / 32;
@@ -88,7 +75,6 @@ void generateDatasetPair( const Config *config,
 		uint32_t backgroundID = backgroundIndices[sequenceID];
 		uint32_t bindingSiteID = motifPoolIndices[motifPoolDistribution(randomGenerator)];
 		const string &bindingSite = bindingSites[bindingSiteID].sequence;
-		const string &proteinMotif = proteinMotifs[bindingSiteID];
 
 		// Generate the DNA sequence and record the exact implanted position
 		string dnaSequence = backgroundPool[backgroundID];
@@ -115,29 +101,24 @@ void generateDatasetPair( const Config *config,
 					 << bindingSite.size() << "\t"
 					 << bindingSite << "\n";
 
-		// Generate the protein sequence and record the exact implanted position
+		// Translate the generated DNA sequence with the standard DNA codon table
 		string proteinSequence;
-		generateProteinBackground(randomGenerator, proteinSequence);
-		uniform_int_distribution<uint64_t> proteinOffsetDistribution(
-			0,
-			PROTEIN_SEQUENCE_LENGTH - proteinMotif.size()
-		);
-		uint64_t proteinOffset = proteinOffsetDistribution(randomGenerator);
-		proteinSequence.replace(proteinOffset, proteinMotif.size(), proteinMotif);
-		if ( proteinSequence.substr(proteinOffset, proteinMotif.size()) != proteinMotif ) {
-			printf( "Protein implantation validation failed for dataset %d, sequence %lu.\n",
-				spec->datasetID,
-				(unsigned long)sequenceID );
-			fflush( stdout );
-			exit(1);
-		}
-
+		string translatedSequence;
+		int64_t translatedOffset = -1;
+		translateDNASequence(dnaSequence,
+				     dnaOffset,
+				     bindingSite.size(),
+				     proteinSequence,
+				     &translatedOffset,
+				     translatedSequence);
 		writeFASTARecord(proteinOutput, sequenceID, proteinSequence);
 		proteinGroundTruthOutput << sequenceID << "\t"
 					     << bindingSiteID << "\t"
-					     << proteinOffset << "\t"
-					     << proteinMotif.size() << "\t"
-					     << proteinMotif << "\n";
+					     << dnaOffset << "\t"
+					     << bindingSite.size() << "\t"
+					     << translatedOffset << "\t"
+					     << translatedSequence.size() << "\t"
+					     << translatedSequence << "\n";
 
 		if ( (sequenceID + 1) % progressInterval == 0 ||
 		     sequenceID + 1 == spec->sequenceNum ) {

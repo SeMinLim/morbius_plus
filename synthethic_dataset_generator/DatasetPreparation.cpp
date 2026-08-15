@@ -67,8 +67,8 @@ void buildBackgroundPool( const vector<FastaRecord> &inputRecords,
 	}
 }
 
-// Return one amino acid for a DNA codon
-// TAA and TAG map to Q, and TGA maps to W, to keep the 20-symbol protein alphabet
+// Translate one DNA codon with the standard genetic code
+// A zero return value represents a stop codon
 char translateCodon( char base0, char base1, char base2 ) {
 	if ( base0 == 'T' ) {
 		if ( base1 == 'T' ) {
@@ -78,9 +78,10 @@ char translateCodon( char base0, char base1, char base2 ) {
 		if ( base1 == 'C' ) return 'S';
 		if ( base1 == 'A' ) {
 			if ( base2 == 'T' || base2 == 'C' ) return 'Y';
-			return 'Q';
+			return 0;
 		}
 		if ( base2 == 'T' || base2 == 'C' ) return 'C';
+		if ( base2 == 'A' ) return 0;
 		return 'W';
 	}
 
@@ -117,35 +118,42 @@ char translateCodon( char base0, char base1, char base2 ) {
 	return 'G';
 }
 
-// Translate complete codons from one binding site
-string translateBindingSite( const string &bindingSite ) {
-	size_t translatedLength = bindingSite.size() / 3;
-	string proteinMotif;
-	proteinMotif.reserve(translatedLength);
+// Translate one generated DNA sequence into the 300-amino-acid protein dataset
+void translateDNASequence( const string &dnaSequence,
+			   uint64_t implantedOffset,
+			   uint64_t implantedLength,
+			   string &proteinSequence,
+			   int64_t *translatedOffset,
+			   string &translatedSequence ) {
+	proteinSequence.clear();
+	translatedSequence.clear();
+	*translatedOffset = -1;
 
-	for ( size_t position = 0; position + 2 < bindingSite.size(); position += 3 ) {
-		char aminoAcid = translateCodon(bindingSite[position],
-						bindingSite[position + 1],
-						bindingSite[position + 2]);
-		proteinMotif.push_back(aminoAcid);
+	uint64_t implantedEnd = implantedOffset + implantedLength;
+	for ( size_t dnaOffset = 0;
+	      dnaOffset + 2 < dnaSequence.size() &&
+	      proteinSequence.size() < PROTEIN_SEQUENCE_LENGTH;
+	      dnaOffset += 3 ) {
+		char aminoAcid = translateCodon(dnaSequence[dnaOffset],
+						dnaSequence[dnaOffset + 1],
+						dnaSequence[dnaOffset + 2]);
+		if ( aminoAcid == 0 ) continue;
+
+		uint64_t proteinOffset = proteinSequence.size();
+		proteinSequence.push_back(aminoAcid);
+
+		uint64_t codonEnd = dnaOffset + 3;
+		if ( dnaOffset < implantedEnd && codonEnd > implantedOffset ) {
+			if ( *translatedOffset < 0 ) *translatedOffset = (int64_t)proteinOffset;
+			translatedSequence.push_back(aminoAcid);
+		}
 	}
 
-	return proteinMotif;
-}
-
-// Build translated protein motifs from the DNA binding-site source
-void buildProteinMotifs( const vector<FastaRecord> &bindingSites,
-			 vector<string> &proteinMotifs ) {
-	proteinMotifs.resize(bindingSites.size());
-	for ( size_t siteIdx = 0; siteIdx < bindingSites.size(); siteIdx ++ ) {
-		proteinMotifs[siteIdx] = translateBindingSite(bindingSites[siteIdx].sequence);
-		if ( proteinMotifs[siteIdx].empty() ||
-		     proteinMotifs[siteIdx].size() > PROTEIN_SEQUENCE_LENGTH ) {
-			printf( "Unsupported translated motif length for binding-site record %lu.\n",
-				(unsigned long)siteIdx );
-			fflush( stdout );
-			exit(1);
-		}
+	if ( proteinSequence.size() != PROTEIN_SEQUENCE_LENGTH ) {
+		printf( "Unable to translate a %d-amino-acid protein sequence from the generated DNA sequence.\n",
+			PROTEIN_SEQUENCE_LENGTH );
+		fflush( stdout );
+		exit(1);
 	}
 }
 
