@@ -19,12 +19,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Prepare datasets and ProSampler
+      - name: Prepare exact datasets and ProSampler
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p benchmark/input benchmark/datasets benchmark/prosampler benchmark/results benchmark/logs benchmark/output
+          mkdir -p benchmark/input benchmark/datasets benchmark/prosampler
+          mkdir -p benchmark/results benchmark/logs benchmark/output
 
           {
             echo '=== uname ==='
@@ -54,47 +55,46 @@ jobs:
           curl -fL --retry 5 --retry-delay 3 \
             'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/upstream5000.fa.gz' \
             -o benchmark/input/upstream5000.fa.gz
-          gunzip -c benchmark/input/upstream5000.fa.gz > benchmark/input/upstream5000.fa
+          gunzip -c benchmark/input/upstream5000.fa.gz \
+            > benchmark/input/upstream5000.fa
 
-          EXPECTED_JASPAR_SHA='b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac'
-          JASPAR_URLS=(
-            'https://jaspar2020.genereg.net/download/data/2020/sites/MA0007.2.sites'
-            'https://jaspar2018.genereg.net/download/data/2018/sites/MA0007.2.sites'
-            'https://jaspar2018.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
-            'https://jaspar2020.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
-            'https://jaspar.uio.no/html/DOWNLOAD/sites/MA0007.2.sites'
-            'http://jaspar.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
-            'https://jaspar2018.genereg.net/download/sites/MA0007.2.sites'
-            'https://jaspar2020.genereg.net/download/sites/MA0007.2.sites'
-            'https://jaspar.elixir.no/api/v1/sites/MA0007.2/?format=fasta'
-          )
-
-          JASPAR_FOUND=0
-          for JASPAR_URL in "${JASPAR_URLS[@]}"; do
-            rm -f benchmark/input/MA0007.2_sites.candidate
-            if curl -fL --retry 2 --retry-delay 2 \
-              "$JASPAR_URL" \
-              -o benchmark/input/MA0007.2_sites.candidate; then
-              CURRENT_SHA="$(sha256sum benchmark/input/MA0007.2_sites.candidate | awk '{print $1}')"
-              printf '%s\t%s\n' "$CURRENT_SHA" "$JASPAR_URL" \
-                >> benchmark/results/jaspar_download_attempts.tsv
-              if [ "$CURRENT_SHA" = "$EXPECTED_JASPAR_SHA" ]; then
-                mv benchmark/input/MA0007.2_sites.candidate \
-                  benchmark/input/MA0007.2_sites.fasta
-                JASPAR_FOUND=1
-                break
-              fi
-            fi
-          done
-
-          if [ "$JASPAR_FOUND" -ne 1 ]; then
-            echo 'Unable to retrieve the exact MA0007.2 binding-site FASTA.' >&2
-            cat benchmark/results/jaspar_download_attempts.tsv 2>/dev/null || true
-            exit 1
-          fi
+          curl -fL --retry 5 --retry-delay 3 \
+            'https://jaspar2020.genereg.net/download/data/2020/sites/MA0007.2.sites' \
+            -o benchmark/input/MA0007.2_sites.fasta
 
           echo '4b2f7d939bfcbe9bf5194df7ebf9c58bc5b443dcf43c47877d1949ad17d85ef3  benchmark/input/upstream5000.fa' | sha256sum -c -
           echo 'b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac  benchmark/input/MA0007.2_sites.fasta' | sha256sum -c -
+
+          # The benchmark only needs DNA datasets. Replace the protein translation
+          # routine inside this temporary checkout with a no-RNG placeholder so that
+          # DNA generation remains bit-identical and does not depend on protein output.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('synthethic_dataset_generator/DatasetPreparation.cpp')
+          text = path.read_text()
+          start_marker = '// Translate one generated DNA sequence into the 300-amino-acid protein dataset\n'
+          end_marker = '// Build dataset specifications\n'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = r'''// Generate a benchmark-only placeholder protein without consuming RNG
+          void translateDNASequence( const string &dnaSequence,
+                                     uint64_t implantedOffset,
+                                     uint64_t implantedLength,
+                                     string &proteinSequence,
+                                     int64_t *translatedOffset,
+                                     string &translatedSequence ) {
+              (void)dnaSequence;
+              (void)implantedOffset;
+              (void)implantedLength;
+              proteinSequence.assign(PROTEIN_SEQUENCE_LENGTH, 'A');
+              translatedSequence.clear();
+              *translatedOffset = -1;
+          }
+
+          '''
+          path.write_text(text[:start] + replacement + text[end:])
+          PY
 
           make -C synthethic_dataset_generator clean all
           ./synthethic_dataset_generator/synthethic_dataset_generator \
@@ -115,13 +115,15 @@ jobs:
           curl -fL --retry 5 --retry-delay 3 \
             'https://raw.githubusercontent.com/zhengchangsulab/ProSampler/master/PROSMPLER_v1.5.tar.gz' \
             -o benchmark/prosampler/PROSMPLER_v1.5.tar.gz
-          tar -xzf benchmark/prosampler/PROSMPLER_v1.5.tar.gz -C benchmark/prosampler
+          tar -xzf benchmark/prosampler/PROSMPLER_v1.5.tar.gz \
+            -C benchmark/prosampler
 
           PROSAMPLER_SOURCE="$(find benchmark/prosampler -type f -name 'ProSampler_v1.5.cc' | head -n 1)"
           if [ -z "$PROSAMPLER_SOURCE" ]; then
             echo 'ProSampler source was not found.' >&2
             exit 1
           fi
+
           g++ -O2 -std=gnu++11 \
             "$PROSAMPLER_SOURCE" \
             -o benchmark/prosampler/ProSampler.bench
@@ -225,6 +227,7 @@ jobs:
           cat benchmark/results/prosampler_elapsed_time.tsv
 
       - name: Upload benchmark results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: prosampler-performance-results
