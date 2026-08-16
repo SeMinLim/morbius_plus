@@ -108,6 +108,7 @@ jobs:
           STREME_VERSION="$($STREME_BIN --version 2>&1 | head -n 1)"
 
           sha256sum "$INPUT_FILE" > benchmark/result/input_checksum.sha256
+          "$STREME_BIN" --help > benchmark/result/streme_help.txt 2>&1 || true
 
           {
             echo '=== uname ==='
@@ -125,56 +126,45 @@ jobs:
             echo "STREME version        : $STREME_VERSION"
             echo "Dataset               : DATASET_DNA_${DATASET_ID}.fa"
             echo "Motif length          : $MOTIF_LENGTH"
-            echo 'Command parameters    : --dna --dna2rna --w <length> --nmotifs 1 --order 2 --seed 0'
+            echo 'Command parameters    : --dna --w <length> --nmotifs 1 --order 2 --seed 0'
           } > benchmark/result/environment.txt
 
-          if ! "$STREME_BIN" --help 2>&1 | grep -q -- '--dna2rna'; then
-            echo 'The installed STREME does not expose --dna2rna.' > "$LOG_FILE"
-            COMMAND_RC=2
-            STATUS='FAILED_NO_DNA2RNA_OPTION'
-            ELAPSED='NA'
-            USER_TIME='NA'
-            SYSTEM_TIME='NA'
-            MAX_RSS='NA'
-          else
-            sync
-            sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
 
-            set +e
-            /usr/bin/time \
-              -f '%e\t%U\t%S\t%M\t%x' \
-              -o "$TIME_FILE" \
-              timeout --signal=TERM --kill-after=60s 14400 \
-              taskset -c "$CPU_ID" \
-              "$STREME_BIN" \
-                --p "$INPUT_FILE" \
-                --dna \
-                --dna2rna \
-                --w "$MOTIF_LENGTH" \
-                --nmotifs 1 \
-                --order 2 \
-                --seed 0 \
-                --oc "$OUTPUT_DIR" \
-              > "$LOG_FILE" 2>&1
-            COMMAND_RC=$?
-            set -e
+          set +e
+          /usr/bin/time \
+            -f '%e\t%U\t%S\t%M\t%x' \
+            -o "$TIME_FILE" \
+            timeout --signal=TERM --kill-after=60s 14400 \
+            taskset -c "$CPU_ID" \
+            "$STREME_BIN" \
+              --p "$INPUT_FILE" \
+              --dna \
+              --w "$MOTIF_LENGTH" \
+              --nmotifs 1 \
+              --order 2 \
+              --seed 0 \
+              --oc "$OUTPUT_DIR" \
+            > "$LOG_FILE" 2>&1
+          COMMAND_RC=$?
+          set -e
 
-            ELAPSED='NA'
-            USER_TIME='NA'
-            SYSTEM_TIME='NA'
-            MAX_RSS='NA'
-            if [ -s "$TIME_FILE" ]; then
-              IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
-            fi
+          ELAPSED='NA'
+          USER_TIME='NA'
+          SYSTEM_TIME='NA'
+          MAX_RSS='NA'
+          if [ -s "$TIME_FILE" ]; then
+            IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+          fi
 
-            STATUS='COMPLETED'
-            if [ "$COMMAND_RC" -eq 124 ]; then
-              STATUS='TIMEOUT_4H'
-            elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
-              STATUS='KILLED_OR_OOM'
-            elif [ "$COMMAND_RC" -ne 0 ]; then
-              STATUS="FAILED_RC_${COMMAND_RC}"
-            fi
+          STATUS='COMPLETED'
+          if [ "$COMMAND_RC" -eq 124 ]; then
+            STATUS='TIMEOUT_4H'
+          elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
+            STATUS='KILLED_OR_OOM'
+          elif [ "$COMMAND_RC" -ne 0 ]; then
+            STATUS="FAILED_RC_${COMMAND_RC}"
           fi
 
           if [ "$STATUS" = 'COMPLETED' ]; then
