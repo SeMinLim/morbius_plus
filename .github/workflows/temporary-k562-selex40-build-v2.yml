@@ -54,15 +54,11 @@ jobs:
               script_lines.append(line)
 
           script = '\n'.join(script_lines) + '\n'
-          old_line = "                  matches = sorted(set(motif_lookup.get(reference_key, [])))"
-          new_lines = """                  exact_motif_id = row['reference_motif_name'].replace(' ', '_')
-                  if exact_motif_id in {motif_id for motif_id, _ in motif_entries}:
-                      matches = [exact_motif_id]
-                  else:
-                      matches = sorted(set(motif_lookup.get(reference_key, [])))"""
-          if old_line not in script:
-              raise RuntimeError('Motif-resolution line was not found in the source workflow.')
-          script = script.replace(old_line, new_lines)
+          old_expression = "matches = sorted(set(motif_lookup.get(reference_key, [])))"
+          new_expression = "matches = sorted({motif_id for motif_id, _ in motif_entries if motif_id == row['reference_motif_name'].replace(' ', '_')})"
+          if old_expression not in script:
+              raise RuntimeError('Motif-resolution expression was not found in the source workflow.')
+          script = script.replace(old_expression, new_expression)
 
           Path('/tmp/build_k562_selex40.sh').write_text(script)
           PY
