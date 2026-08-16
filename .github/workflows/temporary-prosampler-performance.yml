@@ -43,8 +43,6 @@ jobs:
             df -h
           } > benchmark/results/environment.txt
 
-          # Add swap so the largest single-threaded ProSampler cases do not fail solely because
-          # of the standard runner's physical-memory capacity.
           if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
             sudo fallocate -l 12G /swapfile
             sudo chmod 600 /swapfile
@@ -58,9 +56,40 @@ jobs:
             -o benchmark/input/upstream5000.fa.gz
           gunzip -c benchmark/input/upstream5000.fa.gz > benchmark/input/upstream5000.fa
 
-          curl -fL --retry 5 --retry-delay 3 \
-            'https://jaspar.elixir.no/download/sites/MA0007.2.sites' \
-            -o benchmark/input/MA0007.2_sites.fasta
+          EXPECTED_JASPAR_SHA='b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac'
+          JASPAR_URLS=(
+            'https://jaspar2018.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
+            'https://jaspar2020.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
+            'https://jaspar.uio.no/html/DOWNLOAD/sites/MA0007.2.sites'
+            'http://jaspar.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
+            'https://jaspar2018.genereg.net/download/sites/MA0007.2.sites'
+            'https://jaspar2020.genereg.net/download/sites/MA0007.2.sites'
+            'https://jaspar.elixir.no/api/v1/sites/MA0007.2/?format=fasta'
+          )
+
+          JASPAR_FOUND=0
+          for JASPAR_URL in "${JASPAR_URLS[@]}"; do
+            rm -f benchmark/input/MA0007.2_sites.candidate
+            if curl -fL --retry 2 --retry-delay 2 \
+              "$JASPAR_URL" \
+              -o benchmark/input/MA0007.2_sites.candidate; then
+              CURRENT_SHA="$(sha256sum benchmark/input/MA0007.2_sites.candidate | awk '{print $1}')"
+              printf '%s\t%s\n' "$CURRENT_SHA" "$JASPAR_URL" \
+                >> benchmark/results/jaspar_download_attempts.tsv
+              if [ "$CURRENT_SHA" = "$EXPECTED_JASPAR_SHA" ]; then
+                mv benchmark/input/MA0007.2_sites.candidate \
+                  benchmark/input/MA0007.2_sites.fasta
+                JASPAR_FOUND=1
+                break
+              fi
+            fi
+          done
+
+          if [ "$JASPAR_FOUND" -ne 1 ]; then
+            echo 'Unable to retrieve the exact MA0007.2 binding-site FASTA.' >&2
+            cat benchmark/results/jaspar_download_attempts.tsv 2>/dev/null || true
+            exit 1
+          fi
 
           echo '4b2f7d939bfcbe9bf5194df7ebf9c58bc5b443dcf43c47877d1949ad17d85ef3  benchmark/input/upstream5000.fa' | sha256sum -c -
           echo 'b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac  benchmark/input/MA0007.2_sites.fasta' | sha256sum -c -
@@ -91,7 +120,6 @@ jobs:
             echo 'ProSampler source was not found.' >&2
             exit 1
           fi
-          PROSAMPLER_SOURCE_DIR="$(dirname "$PROSAMPLER_SOURCE")"
           g++ -O2 -std=gnu++11 \
             "$PROSAMPLER_SOURCE" \
             -o benchmark/prosampler/ProSampler.bench
@@ -164,7 +192,6 @@ jobs:
               USER_TIME='NA'
               SYSTEM_TIME='NA'
               MAX_RSS='NA'
-              TIME_EXIT="$COMMAND_RC"
               if [ -s "$TIME_FILE" ]; then
                 IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
               fi
