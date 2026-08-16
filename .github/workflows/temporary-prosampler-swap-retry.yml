@@ -1,4 +1,4 @@
-name: Temporary ProSampler High-Memory Retry
+name: Temporary STREME Performance Measurement
 
 on:
   push:
@@ -13,35 +13,27 @@ permissions:
 
 jobs:
   benchmark:
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
+    runs-on: ubuntu-24.04
+    timeout-minutes: 270
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - dataset: 1
-            motif_length: 64
-          - dataset: 1
-            motif_length: 128
-          - dataset: 2
-            motif_length: 16
-          - dataset: 2
-            motif_length: 32
-          - dataset: 2
-            motif_length: 64
-          - dataset: 2
-            motif_length: 128
-          - dataset: 3
-            motif_length: 16
-          - dataset: 3
-            motif_length: 32
-          - dataset: 3
-            motif_length: 64
-          - dataset: 3
-            motif_length: 128
+        dataset: [1, 2, 3]
+        motif_length: [4, 8, 16]
 
     steps:
-      - name: Download exact benchmark package
+      - name: Install STREME 5.5.9
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: streme-benchmark
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            meme=5.5.9
+          cache-environment: true
+          init-shell: bash
+
+      - name: Download exact synthetic DNA datasets
         uses: actions/download-artifact@v4
         with:
           name: prosampler-benchmark-package
@@ -50,7 +42,7 @@ jobs:
           repository: SeMinLim/morbius_plus
           run-id: 31936768291
 
-      - name: Configure disk-backed swap
+      - name: Configure swap
         shell: bash
         run: |
           set -euo pipefail
@@ -61,29 +53,25 @@ jobs:
             free -h
             df -h /
             swapon --show || true
-          } | tee benchmark/result/swap_setup.txt
+          } > benchmark/result/swap_setup.txt
 
           FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-          RESERVE_BYTES=$((10 * 1024 * 1024 * 1024))
-          MAX_SWAP_BYTES=$((60 * 1024 * 1024 * 1024))
+          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((48 * 1024 * 1024 * 1024))
           FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
 
           if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
             FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
           fi
 
-          if [ "$FILE_SWAP_BYTES" -lt $((8 * 1024 * 1024 * 1024)) ]; then
-            echo 'Insufficient disk space for the high-memory benchmark.' >&2
-            exit 1
+          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-streme
+            sudo chmod 600 /swapfile-streme
+            sudo mkswap /swapfile-streme
+            sudo swapon -p 10 /swapfile-streme
+            sudo sysctl -w vm.swappiness=100 || true
+            sudo sysctl -w vm.page-cluster=0 || true
           fi
-
-          sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-prosampler
-          sudo chmod 600 /swapfile-prosampler
-          sudo mkswap /swapfile-prosampler
-          sudo swapon -p 10 /swapfile-prosampler
-
-          sudo sysctl -w vm.swappiness=100 || true
-          sudo sysctl -w vm.page-cluster=0 || true
 
           {
             echo
@@ -91,26 +79,35 @@ jobs:
             free -h
             df -h /
             swapon --show || true
-          } | tee -a benchmark/result/swap_setup.txt
+          } >> benchmark/result/swap_setup.txt
 
-      - name: Run one single-core ProSampler measurement
-        shell: bash
+      - name: Run one single-core STREME measurement
+        shell: micromamba-shell {0}
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          VECLIB_MAXIMUM_THREADS: 1
+          NUMEXPR_NUM_THREADS: 1
         run: |
           set -u
 
           mkdir -p benchmark/result benchmark/output
-          chmod +x benchmark/package/ProSampler.bench
 
           DATASET_ID='${{ matrix.dataset }}'
           MOTIF_LENGTH='${{ matrix.motif_length }}'
           INPUT_FILE="benchmark/package/DATASET_DNA_${DATASET_ID}.fa"
-          OUTPUT_PREFIX="benchmark/output/DNA${DATASET_ID}_K${MOTIF_LENGTH}"
+          OUTPUT_DIR="benchmark/output/DNA${DATASET_ID}_W${MOTIF_LENGTH}"
           LOG_FILE="benchmark/result/run.log"
           TIME_FILE="benchmark/result/time.tsv"
+          STREME_BIN="$(command -v streme)"
 
           CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
           CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          STREME_VERSION="$($STREME_BIN --version 2>&1 | head -n 1)"
+
+          sha256sum "$INPUT_FILE" > benchmark/result/input_checksum.sha256
 
           {
             echo '=== uname ==='
@@ -119,53 +116,71 @@ jobs:
             echo '=== lscpu ==='
             lscpu
             echo
+            echo '=== memory ==='
+            free -h
+            echo
             echo "Benchmark CPU ID      : $CPU_ID"
             echo "Benchmark CPU allowed : $CPU_ALLOWED"
+            echo "STREME binary         : $STREME_BIN"
+            echo "STREME version        : $STREME_VERSION"
             echo "Dataset               : DATASET_DNA_${DATASET_ID}.fa"
             echo "Motif length          : $MOTIF_LENGTH"
-            echo 'Command parameters    : -b 3 -p 1 -l 0 -f 100 -m 1'
+            echo 'Command parameters    : --dna --norc --w <length> --nmotifs 1 --order 2 --seed 0'
           } > benchmark/result/environment.txt
 
-          TIMEOUT_SECONDS=10800
-          if [ "$MOTIF_LENGTH" -eq 128 ]; then
-            TIMEOUT_SECONDS=1800
+          if ! "$STREME_BIN" --help 2>&1 | grep -q -- '--norc'; then
+            echo 'The installed STREME does not expose --norc.' > "$LOG_FILE"
+            COMMAND_RC=2
+            STATUS='FAILED_NO_NORC_OPTION'
+            ELAPSED='NA'
+            USER_TIME='NA'
+            SYSTEM_TIME='NA'
+            MAX_RSS='NA'
+          else
+            sync
+            sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+            set +e
+            /usr/bin/time \
+              -f '%e\t%U\t%S\t%M\t%x' \
+              -o "$TIME_FILE" \
+              timeout --signal=TERM --kill-after=60s 14400 \
+              taskset -c "$CPU_ID" \
+              "$STREME_BIN" \
+                --p "$INPUT_FILE" \
+                --dna \
+                --norc \
+                --w "$MOTIF_LENGTH" \
+                --nmotifs 1 \
+                --order 2 \
+                --seed 0 \
+                --oc "$OUTPUT_DIR" \
+              > "$LOG_FILE" 2>&1
+            COMMAND_RC=$?
+            set -e
+
+            ELAPSED='NA'
+            USER_TIME='NA'
+            SYSTEM_TIME='NA'
+            MAX_RSS='NA'
+            if [ -s "$TIME_FILE" ]; then
+              IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+            fi
+
+            STATUS='COMPLETED'
+            if [ "$COMMAND_RC" -eq 124 ]; then
+              STATUS='TIMEOUT_4H'
+            elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
+              STATUS='KILLED_OR_OOM'
+            elif [ "$COMMAND_RC" -ne 0 ]; then
+              STATUS="FAILED_RC_${COMMAND_RC}"
+            fi
           fi
 
-          sync
-          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
-
-          /usr/bin/time \
-            -f '%e\t%U\t%S\t%M\t%x' \
-            -o "$TIME_FILE" \
-            timeout --signal=TERM --kill-after=30s "$TIMEOUT_SECONDS" \
-            taskset -c "$CPU_ID" \
-            benchmark/package/ProSampler.bench \
-              -i "$INPUT_FILE" \
-              -b 3 \
-              -o "$OUTPUT_PREFIX" \
-              -p 1 \
-              -k "$MOTIF_LENGTH" \
-              -l 0 \
-              -f 100 \
-              -m 1 \
-            > "$LOG_FILE" 2>&1
-          COMMAND_RC=$?
-
-          ELAPSED='NA'
-          USER_TIME='NA'
-          SYSTEM_TIME='NA'
-          MAX_RSS='NA'
-          if [ -s "$TIME_FILE" ]; then
-            IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
-          fi
-
-          STATUS='COMPLETED'
-          if [ "$COMMAND_RC" -eq 124 ]; then
-            STATUS='TIMEOUT'
-          elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
-            STATUS='KILLED_OR_OOM'
-          elif [ "$COMMAND_RC" -ne 0 ]; then
-            STATUS="FAILED_RC_${COMMAND_RC}"
+          if [ "$STATUS" = 'COMPLETED' ]; then
+            if [ ! -s "$OUTPUT_DIR/streme.txt" ]; then
+              STATUS='FAILED_NO_RESULT'
+            fi
           fi
 
           {
@@ -176,9 +191,9 @@ jobs:
             swapon --show || true
           } >> benchmark/result/swap_setup.txt
 
-          printf 'dataset\tmotif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\n' \
+          printf 'dataset\tmotif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\tstreme_version\n' \
             > benchmark/result/result.tsv
-          printf 'DATASET_DNA_%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          printf 'DATASET_DNA_%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$DATASET_ID" \
             "$MOTIF_LENGTH" \
             "$STATUS" \
@@ -188,15 +203,89 @@ jobs:
             "$MAX_RSS" \
             "$COMMAND_RC" \
             "$CPU_MODEL" \
+            "$STREME_VERSION" \
             >> benchmark/result/result.tsv
 
           exit 0
 
-      - name: Upload retry measurement
+      - name: Upload one STREME measurement
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prosampler-swap-DNA${{ matrix.dataset }}-K${{ matrix.motif_length }}
+          name: streme-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
           path: benchmark/result
+          retention-days: 1
+          compression-level: 6
+
+  collect:
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download measurement artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: streme-DNA*-W*
+          path: collected
+          merge-multiple: false
+
+      - name: Aggregate results
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p final
+
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+
+          rows = []
+          for path in Path('collected').rglob('result.tsv'):
+              with path.open(newline='') as input_file:
+                  rows.extend(csv.DictReader(input_file, delimiter='\t'))
+
+          rows.sort(
+              key=lambda row: (
+                  int(row['dataset'].rsplit('_', 1)[1]),
+                  int(row['motif_length']),
+              )
+          )
+
+          fields = [
+              'dataset',
+              'motif_length',
+              'status',
+              'elapsed_seconds',
+              'user_seconds',
+              'system_seconds',
+              'max_rss_kb',
+              'exit_code',
+              'cpu_model',
+              'streme_version',
+          ]
+
+          with Path('final/streme_elapsed_time.tsv').open('w', newline='') as output_file:
+              writer = csv.DictWriter(
+                  output_file,
+                  fieldnames=fields,
+                  delimiter='\t',
+                  lineterminator='\n',
+              )
+              writer.writeheader()
+              writer.writerows(rows)
+
+          if len(rows) != 9:
+              raise RuntimeError(f'Expected 9 measurements, found {len(rows)}')
+          PY
+
+          cp -a collected final/individual_measurements
+          cat final/streme_elapsed_time.tsv
+
+      - name: Upload complete STREME results
+        uses: actions/upload-artifact@v4
+        with:
+          name: streme-performance-results
+          path: final
           retention-days: 1
           compression-level: 6
