@@ -1,0 +1,206 @@
+name: Temporary ProSampler Performance Measurement
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-prosampler-performance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare datasets and ProSampler
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p benchmark/input benchmark/datasets benchmark/prosampler benchmark/results benchmark/logs benchmark/output
+
+          {
+            echo '=== uname ==='
+            uname -a
+            echo
+            echo '=== lscpu ==='
+            lscpu
+            echo
+            echo '=== CPU affinity ==='
+            grep '^Cpus_allowed_list' /proc/self/status
+            echo
+            echo '=== memory before swap ==='
+            free -h
+            echo
+            echo '=== disk ==='
+            df -h
+          } > benchmark/results/environment.txt
+
+          # Add swap so the largest single-threaded ProSampler cases do not fail solely because
+          # of the standard runner's physical-memory capacity.
+          if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
+            sudo fallocate -l 12G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+          free -h >> benchmark/results/environment.txt
+
+          curl -fL --retry 5 --retry-delay 3 \
+            'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/upstream5000.fa.gz' \
+            -o benchmark/input/upstream5000.fa.gz
+          gunzip -c benchmark/input/upstream5000.fa.gz > benchmark/input/upstream5000.fa
+
+          curl -fL --retry 5 --retry-delay 3 \
+            'https://jaspar.elixir.no/download/sites/MA0007.2.sites' \
+            -o benchmark/input/MA0007.2_sites.fasta
+
+          echo '4b2f7d939bfcbe9bf5194df7ebf9c58bc5b443dcf43c47877d1949ad17d85ef3  benchmark/input/upstream5000.fa' | sha256sum -c -
+          echo 'b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac  benchmark/input/MA0007.2_sites.fasta' | sha256sum -c -
+
+          make -C synthethic_dataset_generator clean all
+          ./synthethic_dataset_generator/synthethic_dataset_generator \
+            --background benchmark/input/upstream5000.fa \
+            --binding-sites benchmark/input/MA0007.2_sites.fasta \
+            --output benchmark/datasets \
+            --seed 1 \
+            > benchmark/logs/dataset_generation.log 2>&1
+
+          mv benchmark/datasets/DATASET_DNA_1.fasta benchmark/datasets/DATASET_DNA_1.fa
+          mv benchmark/datasets/DATASET_DNA_2.fasta benchmark/datasets/DATASET_DNA_2.fa
+          mv benchmark/datasets/DATASET_DNA_3.fasta benchmark/datasets/DATASET_DNA_3.fa
+
+          echo '933809e6d428a1cd7e2469345ed79adfa0d270dfe4b9ccc3aea628668567ed17  benchmark/datasets/DATASET_DNA_1.fa' | sha256sum -c -
+          echo '3c540d7ad8f78ab8c6011113e520fc6c40e26b4a593101d4fd6be92b43fde88e  benchmark/datasets/DATASET_DNA_2.fa' | sha256sum -c -
+          echo '499253156c097fff89c6bc7a36acf21ea3d1043c16577a930a6a00ca92addd22  benchmark/datasets/DATASET_DNA_3.fa' | sha256sum -c -
+
+          curl -fL --retry 5 --retry-delay 3 \
+            'https://raw.githubusercontent.com/zhengchangsulab/ProSampler/master/PROSMPLER_v1.5.tar.gz' \
+            -o benchmark/prosampler/PROSMPLER_v1.5.tar.gz
+          tar -xzf benchmark/prosampler/PROSMPLER_v1.5.tar.gz -C benchmark/prosampler
+
+          PROSAMPLER_SOURCE="$(find benchmark/prosampler -type f -name 'ProSampler_v1.5.cc' | head -n 1)"
+          if [ -z "$PROSAMPLER_SOURCE" ]; then
+            echo 'ProSampler source was not found.' >&2
+            exit 1
+          fi
+          PROSAMPLER_SOURCE_DIR="$(dirname "$PROSAMPLER_SOURCE")"
+          g++ -O2 -std=gnu++11 \
+            "$PROSAMPLER_SOURCE" \
+            -o benchmark/prosampler/ProSampler.bench
+
+          sha256sum benchmark/prosampler/PROSMPLER_v1.5.tar.gz \
+            benchmark/prosampler/ProSampler.bench \
+            benchmark/datasets/DATASET_DNA_1.fa \
+            benchmark/datasets/DATASET_DNA_2.fa \
+            benchmark/datasets/DATASET_DNA_3.fa \
+            > benchmark/results/input_checksums.sha256
+
+      - name: Run single-core ProSampler measurements
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+
+          {
+            echo
+            echo "Benchmark CPU ID        : $CPU_ID"
+            echo "Benchmark CPU allowed   : $CPU_ALLOWED"
+            echo "ProSampler compiler     : $(g++ --version | head -n 1)"
+            echo "ProSampler compile flags: -O2 -std=gnu++11"
+            echo "Command parameters      : -b 3 -p 1 -l 0 -f 100 -m 1"
+          } >> benchmark/results/environment.txt
+
+          printf 'dataset\tmotif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\n' \
+            > benchmark/results/prosampler_elapsed_time.tsv
+
+          for DATASET_ID in 1 2 3; do
+            INPUT_FILE="benchmark/datasets/DATASET_DNA_${DATASET_ID}.fa"
+
+            for MOTIF_LENGTH in 4 8 16 32 64 128; do
+              RUN_NAME="DNA${DATASET_ID}_K${MOTIF_LENGTH}"
+              OUTPUT_PREFIX="benchmark/output/${RUN_NAME}"
+              LOG_FILE="benchmark/logs/${RUN_NAME}.log"
+              TIME_FILE="benchmark/results/${RUN_NAME}.time"
+
+              rm -f "${OUTPUT_PREFIX}".* "$TIME_FILE"
+              sync
+              sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+              TIMEOUT_SECONDS=7200
+              if [ "$MOTIF_LENGTH" -eq 128 ]; then
+                TIMEOUT_SECONDS=1800
+              fi
+
+              set +e
+              /usr/bin/time \
+                -f '%e\t%U\t%S\t%M\t%x' \
+                -o "$TIME_FILE" \
+                timeout --signal=TERM --kill-after=30s "$TIMEOUT_SECONDS" \
+                taskset -c "$CPU_ID" \
+                benchmark/prosampler/ProSampler.bench \
+                  -i "$INPUT_FILE" \
+                  -b 3 \
+                  -o "$OUTPUT_PREFIX" \
+                  -p 1 \
+                  -k "$MOTIF_LENGTH" \
+                  -l 0 \
+                  -f 100 \
+                  -m 1 \
+                > "$LOG_FILE" 2>&1
+              COMMAND_RC=$?
+              set -e
+
+              ELAPSED='NA'
+              USER_TIME='NA'
+              SYSTEM_TIME='NA'
+              MAX_RSS='NA'
+              TIME_EXIT="$COMMAND_RC"
+              if [ -s "$TIME_FILE" ]; then
+                IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+              fi
+
+              STATUS='COMPLETED'
+              if [ "$COMMAND_RC" -eq 124 ]; then
+                STATUS='TIMEOUT'
+              elif [ "$COMMAND_RC" -eq 137 ]; then
+                STATUS='KILLED_OR_OOM'
+              elif [ "$COMMAND_RC" -ne 0 ]; then
+                STATUS="FAILED_RC_${COMMAND_RC}"
+              fi
+
+              printf 'DATASET_DNA_%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$DATASET_ID" \
+                "$MOTIF_LENGTH" \
+                "$STATUS" \
+                "$ELAPSED" \
+                "$USER_TIME" \
+                "$SYSTEM_TIME" \
+                "$MAX_RSS" \
+                "$COMMAND_RC" \
+                >> benchmark/results/prosampler_elapsed_time.tsv
+
+              rm -f "${OUTPUT_PREFIX}".*
+            done
+          done
+
+          cat benchmark/results/prosampler_elapsed_time.tsv
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: prosampler-performance-results
+          path: |
+            benchmark/results
+            benchmark/logs
+          retention-days: 1
+          compression-level: 6
