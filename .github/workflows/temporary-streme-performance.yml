@@ -1,4 +1,4 @@
-name: Temporary STREME Performance Measurement
+name: Temporary STREME Seed-0 Performance Measurement
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - '.github/workflows/temporary-streme-performance.yml'
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -63,18 +64,10 @@ jobs:
           sha256sum benchmark/package/DATASET_DNA_*.fa \
             > benchmark/metadata/dataset_checksums.sha256
 
-          {
-            echo 'Generator commit: fcacf983fe223dc442503a858070730a5278aa1f'
-            echo 'Generator seed: 1'
-            echo 'DNA1: 32768 sequences x 1000 bp'
-            echo 'DNA2: 65536 sequences x 1000 bp'
-            echo 'DNA3: 131072 sequences x 1000 bp'
-          } > benchmark/metadata/dataset_metadata.txt
-
       - name: Upload exact DNA datasets
         uses: actions/upload-artifact@v4
         with:
-          name: streme-dna-datasets
+          name: streme-seed0-dna-datasets
           path: benchmark/package
           retention-days: 1
           compression-level: 6
@@ -82,7 +75,7 @@ jobs:
       - name: Upload dataset metadata
         uses: actions/upload-artifact@v4
         with:
-          name: streme-dataset-metadata
+          name: streme-seed0-dataset-metadata
           path: benchmark/metadata
           retention-days: 1
           compression-level: 6
@@ -90,7 +83,7 @@ jobs:
   benchmark:
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 255
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 9
@@ -99,7 +92,7 @@ jobs:
         motif_length: [4, 8, 16]
 
     steps:
-      - name: Install STREME
+      - name: Install STREME 5.5.9
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: streme-benchmark
@@ -107,15 +100,46 @@ jobs:
             -c conda-forge
             -c bioconda
             python=3.9
-            meme=5.3.0
+            meme=5.5.9
           cache-environment: true
           init-shell: bash
 
       - name: Download exact DNA datasets
         uses: actions/download-artifact@v4
         with:
-          name: streme-dna-datasets
+          name: streme-seed0-dna-datasets
           path: benchmark/package
+
+      - name: Configure swap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p benchmark/result
+
+          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((48 * 1024 * 1024 * 1024))
+          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
+
+          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
+            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
+          fi
+
+          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-streme
+            sudo chmod 600 /swapfile-streme
+            sudo mkswap /swapfile-streme
+            sudo swapon -p 10 /swapfile-streme
+            sudo sysctl -w vm.swappiness=100 || true
+            sudo sysctl -w vm.page-cluster=0 || true
+          fi
+
+          {
+            free -h
+            df -h /
+            swapon --show || true
+          } > benchmark/result/swap_setup.txt
 
       - name: Run one single-core STREME measurement
         shell: micromamba-shell {0}
@@ -135,7 +159,7 @@ jobs:
           INPUT_FILE="benchmark/package/DATASET_DNA_${DATASET_ID}.fa"
           OUTPUT_DIR="benchmark/output/DNA${DATASET_ID}_W${MOTIF_LENGTH}"
           LOG_FILE="benchmark/result/run.log"
-          TIME_FILE="benchmark/result/time.tsv"
+          TIME_FILE="benchmark/result/time.txt"
           RESULT_FILE="benchmark/result/result.tsv"
           ENV_FILE="benchmark/result/environment.txt"
 
@@ -152,6 +176,9 @@ jobs:
             echo '=== lscpu ==='
             lscpu
             echo
+            echo '=== memory ==='
+            free -h
+            echo
             echo "STREME path           : $STREME_PATH"
             echo "STREME version        : $STREME_VERSION"
             echo "Benchmark CPU ID      : $CPU_ID"
@@ -159,45 +186,48 @@ jobs:
             echo "Dataset               : DATASET_DNA_${DATASET_ID}.fa"
             echo "Motif length          : $MOTIF_LENGTH"
             echo 'Motif number          : 1'
-            echo 'Strand                 : forward only (--norc)'
-            echo 'Negative set           : STREME-generated shuffled controls'
-            echo 'Random seed            : 1'
-            echo 'External timeout       : 14400 seconds'
+            echo 'DNA strand mode       : STREME standard DNA search'
+            echo 'Background order      : 2'
+            echo 'Random seed           : 0'
+            echo 'External timeout      : 21120 seconds'
+            echo 'Command parameters    : --dna --w <length> --nmotifs 1 --order 2 --seed 0'
           } > "$ENV_FILE"
 
           sync
           sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
 
+          set +e
           /usr/bin/time \
-            -f '%e\t%U\t%S\t%M\t%x' \
+            -f 'elapsed_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nmax_rss_kb=%M\nexit_code=%x' \
             -o "$TIME_FILE" \
-            timeout --signal=TERM --kill-after=30s 14400 \
+            timeout --signal=TERM --kill-after=60s 21120 \
             taskset -c "$CPU_ID" \
             "$STREME_PATH" \
               --p "$INPUT_FILE" \
               --oc "$OUTPUT_DIR" \
               --dna \
-              --minw "$MOTIF_LENGTH" \
-              --maxw "$MOTIF_LENGTH" \
+              --w "$MOTIF_LENGTH" \
               --nmotifs 1 \
-              --norc \
-              --seed 1 \
+              --order 2 \
+              --seed 0 \
             > "$LOG_FILE" 2>&1
           COMMAND_RC=$?
+          set -e
 
-          ELAPSED='NA'
-          USER_TIME='NA'
-          SYSTEM_TIME='NA'
-          MAX_RSS='NA'
-          TIME_EXIT='NA'
-          if [ -s "$TIME_FILE" ]; then
-            IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
-          fi
+          ELAPSED="$(awk -F= '$1 == "elapsed_seconds" {print $2}' "$TIME_FILE" | tail -n 1)"
+          USER_TIME="$(awk -F= '$1 == "user_seconds" {print $2}' "$TIME_FILE" | tail -n 1)"
+          SYSTEM_TIME="$(awk -F= '$1 == "system_seconds" {print $2}' "$TIME_FILE" | tail -n 1)"
+          MAX_RSS="$(awk -F= '$1 == "max_rss_kb" {print $2}' "$TIME_FILE" | tail -n 1)"
+
+          [ -n "$ELAPSED" ] || ELAPSED='NA'
+          [ -n "$USER_TIME" ] || USER_TIME='NA'
+          [ -n "$SYSTEM_TIME" ] || SYSTEM_TIME='NA'
+          [ -n "$MAX_RSS" ] || MAX_RSS='NA'
 
           STATUS='COMPLETED'
           if [ "$COMMAND_RC" -eq 124 ]; then
-            STATUS='TIMEOUT_14400S'
-          elif [ "$COMMAND_RC" -eq 137 ]; then
+            STATUS='TIMEOUT_21120S'
+          elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
             STATUS='KILLED_OR_OOM'
           elif [ "$COMMAND_RC" -ne 0 ]; then
             STATUS="FAILED_RC_${COMMAND_RC}"
@@ -227,7 +257,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: streme-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
+          name: streme-seed0-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
           path: benchmark/result
           retention-days: 1
           compression-level: 6
@@ -242,7 +272,7 @@ jobs:
       - name: Download measurement artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: streme-DNA*-W*
+          pattern: streme-seed0-DNA*-W*
           path: collected
           merge-multiple: false
 
@@ -278,7 +308,7 @@ jobs:
               'cpu_model',
               'streme_version',
           ]
-          output = Path('final/streme_elapsed_time.tsv')
+          output = Path('final/streme_seed0_elapsed_time.tsv')
           with output.open('w', newline='') as output_file:
               writer = csv.DictWriter(
                   output_file,
@@ -294,12 +324,12 @@ jobs:
           PY
 
           cp -a collected final/individual_measurements
-          cat final/streme_elapsed_time.tsv
+          cat final/streme_seed0_elapsed_time.tsv
 
       - name: Upload complete STREME results
         uses: actions/upload-artifact@v4
         with:
-          name: streme-performance-results
+          name: streme-seed0-performance-results
           path: final
           retention-days: 1
           compression-level: 6
