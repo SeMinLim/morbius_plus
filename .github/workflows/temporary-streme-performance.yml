@@ -1,4 +1,4 @@
-name: Temporary STREME Seed-0 Performance Measurement
+name: Temporary STREME Seed-0 Remaining Measurements
 
 on:
   push:
@@ -12,84 +12,34 @@ permissions:
   contents: read
 
 jobs:
-  prepare:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate exact DNA datasets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p benchmark/input benchmark/package benchmark/metadata
-
-          curl -fL --retry 5 --retry-delay 3 \
-            'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/upstream5000.fa.gz' \
-            -o benchmark/input/upstream5000.fa.gz
-          gunzip -c benchmark/input/upstream5000.fa.gz \
-            > benchmark/input/upstream5000.fa
-
-          curl -fL --retry 5 --retry-delay 3 \
-            'https://jaspar2020.genereg.net/download/data/2020/sites/MA0007.2.sites' \
-            -o benchmark/input/MA0007.2_sites.fasta
-
-          echo '4b2f7d939bfcbe9bf5194df7ebf9c58bc5b443dcf43c47877d1949ad17d85ef3  benchmark/input/upstream5000.fa' | sha256sum -c -
-          echo 'b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac  benchmark/input/MA0007.2_sites.fasta' | sha256sum -c -
-
-          git checkout fcacf983fe223dc442503a858070730a5278aa1f -- \
-            synthethic_dataset_generator
-
-          make -C synthethic_dataset_generator clean all
-          ./synthethic_dataset_generator/synthethic_dataset_generator \
-            --background benchmark/input/upstream5000.fa \
-            --binding-sites benchmark/input/MA0007.2_sites.fasta \
-            --output benchmark/generated \
-            --seed 1 \
-            > benchmark/metadata/dataset_generation.log 2>&1
-
-          mv benchmark/generated/DATASET_DNA_1.fasta benchmark/package/DATASET_DNA_1.fa
-          mv benchmark/generated/DATASET_DNA_2.fasta benchmark/package/DATASET_DNA_2.fa
-          mv benchmark/generated/DATASET_DNA_3.fasta benchmark/package/DATASET_DNA_3.fa
-
-          echo '933809e6d428a1cd7e2469345ed79adfa0d270dfe4b9ccc3aea628668567ed17  benchmark/package/DATASET_DNA_1.fa' | sha256sum -c -
-          echo '3c540d7ad8f78ab8c6011113e520fc6c40e26b4a593101d4fd6be92b43fde88e  benchmark/package/DATASET_DNA_2.fa' | sha256sum -c -
-          echo '499253156c097fff89c6bc7a36acf21ea3d1043c16577a930a6a00ca92addd22  benchmark/package/DATASET_DNA_3.fa' | sha256sum -c -
-
-          sha256sum benchmark/package/DATASET_DNA_*.fa \
-            > benchmark/metadata/dataset_checksums.sha256
-
-      - name: Upload exact DNA datasets
-        uses: actions/upload-artifact@v4
-        with:
-          name: streme-seed0-dna-datasets
-          path: benchmark/package
-          retention-days: 1
-          compression-level: 6
-
-      - name: Upload dataset metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: streme-seed0-dataset-metadata
-          path: benchmark/metadata
-          retention-days: 1
-          compression-level: 6
-
   benchmark:
-    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 9
+      max-parallel: 5
       matrix:
-        dataset: [1, 2, 3]
-        motif_length: [4, 8, 16]
+        include:
+          - dataset: 3
+            motif_length: 4
+            swap_gb: 0
+            external_timeout: 7200
+          - dataset: 3
+            motif_length: 8
+            swap_gb: 8
+            external_timeout: 14400
+          - dataset: 1
+            motif_length: 16
+            swap_gb: 48
+            external_timeout: 21120
+          - dataset: 2
+            motif_length: 16
+            swap_gb: 48
+            external_timeout: 21120
+          - dataset: 3
+            motif_length: 16
+            swap_gb: 48
+            external_timeout: 21120
 
     steps:
       - name: Install STREME 5.5.9
@@ -109,37 +59,33 @@ jobs:
         with:
           name: streme-seed0-dna-datasets
           path: benchmark/package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: SeMinLim/morbius_plus
+          run-id: 31948091866
 
-      - name: Configure swap
+      - name: Configure memory policy
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p benchmark/result
+          SWAP_GB='${{ matrix.swap_gb }}'
 
-          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
-          MAX_SWAP_BYTES=$((48 * 1024 * 1024 * 1024))
-          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
-
-          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
-            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
-          fi
-
-          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
-            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-streme
+          if [ "$SWAP_GB" -gt 0 ]; then
+            sudo fallocate -l "${SWAP_GB}G" /swapfile-streme
             sudo chmod 600 /swapfile-streme
             sudo mkswap /swapfile-streme
             sudo swapon -p 10 /swapfile-streme
-            sudo sysctl -w vm.swappiness=100 || true
-            sudo sysctl -w vm.page-cluster=0 || true
           fi
+
+          sudo sysctl -w vm.swappiness=1 || true
+          sudo sysctl -w vm.page-cluster=0 || true
 
           {
             free -h
             df -h /
             swapon --show || true
-          } > benchmark/result/swap_setup.txt
+          } > benchmark/result/memory_setup.txt
 
       - name: Run one single-core STREME measurement
         shell: micromamba-shell {0}
@@ -156,6 +102,7 @@ jobs:
 
           DATASET_ID='${{ matrix.dataset }}'
           MOTIF_LENGTH='${{ matrix.motif_length }}'
+          EXTERNAL_TIMEOUT='${{ matrix.external_timeout }}'
           INPUT_FILE="benchmark/package/DATASET_DNA_${DATASET_ID}.fa"
           OUTPUT_DIR="benchmark/output/DNA${DATASET_ID}_W${MOTIF_LENGTH}"
           LOG_FILE="benchmark/result/run.log"
@@ -189,7 +136,7 @@ jobs:
             echo 'DNA strand mode       : STREME standard DNA search'
             echo 'Background order      : 2'
             echo 'Random seed           : 0'
-            echo 'External timeout      : 21120 seconds'
+            echo "External timeout      : ${EXTERNAL_TIMEOUT} seconds"
             echo 'Command parameters    : --dna --w <length> --nmotifs 1 --order 2 --seed 0'
           } > "$ENV_FILE"
 
@@ -200,7 +147,7 @@ jobs:
           /usr/bin/time \
             -f 'elapsed_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S\nmax_rss_kb=%M\nexit_code=%x' \
             -o "$TIME_FILE" \
-            timeout --signal=TERM --kill-after=60s 21120 \
+            timeout --signal=TERM --kill-after=60s "$EXTERNAL_TIMEOUT" \
             taskset -c "$CPU_ID" \
             "$STREME_PATH" \
               --p "$INPUT_FILE" \
@@ -226,7 +173,7 @@ jobs:
 
           STATUS='COMPLETED'
           if [ "$COMMAND_RC" -eq 124 ]; then
-            STATUS='TIMEOUT_21120S'
+            STATUS="TIMEOUT_${EXTERNAL_TIMEOUT}S"
           elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
             STATUS='KILLED_OR_OOM'
           elif [ "$COMMAND_RC" -ne 0 ]; then
@@ -257,7 +204,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: streme-seed0-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
+          name: streme-seed0-refined-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
           path: benchmark/result
           retention-days: 1
           compression-level: 6
@@ -272,11 +219,11 @@ jobs:
       - name: Download measurement artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: streme-seed0-DNA*-W*
+          pattern: streme-seed0-refined-DNA*-W*
           path: collected
           merge-multiple: false
 
-      - name: Aggregate STREME results
+      - name: Aggregate remaining results
         shell: bash
         run: |
           set -euo pipefail
@@ -296,6 +243,7 @@ jobs:
               int(row['motif_length']),
           ))
 
+          output = Path('final/streme_seed0_remaining.tsv')
           fields = [
               'dataset',
               'motif_length',
@@ -308,7 +256,6 @@ jobs:
               'cpu_model',
               'streme_version',
           ]
-          output = Path('final/streme_seed0_elapsed_time.tsv')
           with output.open('w', newline='') as output_file:
               writer = csv.DictWriter(
                   output_file,
@@ -319,17 +266,17 @@ jobs:
               writer.writeheader()
               writer.writerows(rows)
 
-          if len(rows) != 9:
-              raise RuntimeError(f'Expected 9 measurements, found {len(rows)}')
+          if len(rows) != 5:
+              raise RuntimeError(f'Expected 5 measurements, found {len(rows)}')
           PY
 
           cp -a collected final/individual_measurements
-          cat final/streme_seed0_elapsed_time.tsv
+          cat final/streme_seed0_remaining.tsv
 
-      - name: Upload complete STREME results
+      - name: Upload complete remaining results
         uses: actions/upload-artifact@v4
         with:
-          name: streme-seed0-performance-results
+          name: streme-seed0-remaining-results
           path: final
           retention-days: 1
           compression-level: 6
