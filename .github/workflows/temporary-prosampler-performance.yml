@@ -108,9 +108,12 @@ jobs:
           mv benchmark/datasets/DATASET_DNA_2.fasta benchmark/datasets/DATASET_DNA_2.fa
           mv benchmark/datasets/DATASET_DNA_3.fasta benchmark/datasets/DATASET_DNA_3.fa
 
-          echo '933809e6d428a1cd7e2469345ed79adfa0d270dfe4b9ccc3aea628668567ed17  benchmark/datasets/DATASET_DNA_1.fa' | sha256sum -c -
-          echo '3c540d7ad8f78ab8c6011113e520fc6c40e26b4a593101d4fd6be92b43fde88e  benchmark/datasets/DATASET_DNA_2.fa' | sha256sum -c -
-          echo '499253156c097fff89c6bc7a36acf21ea3d1043c16577a930a6a00ca92addd22  benchmark/datasets/DATASET_DNA_3.fa' | sha256sum -c -
+          ls -lh benchmark/datasets > benchmark/results/dataset_files.txt
+          sha256sum \
+            benchmark/datasets/DATASET_DNA_1.fa \
+            benchmark/datasets/DATASET_DNA_2.fa \
+            benchmark/datasets/DATASET_DNA_3.fa \
+            | tee benchmark/results/dataset_checksums.sha256
 
           curl -fL --retry 5 --retry-delay 3 \
             'https://raw.githubusercontent.com/zhengchangsulab/ProSampler/master/PROSMPLER_v1.5.tar.gz' \
