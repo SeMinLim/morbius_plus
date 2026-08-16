@@ -1,0 +1,207 @@
+name: Temporary ProSampler High-Memory Retry
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-prosampler-swap-retry.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dataset: 1
+            motif_length: 64
+          - dataset: 1
+            motif_length: 128
+          - dataset: 2
+            motif_length: 16
+          - dataset: 2
+            motif_length: 32
+          - dataset: 2
+            motif_length: 64
+          - dataset: 2
+            motif_length: 128
+          - dataset: 3
+            motif_length: 16
+          - dataset: 3
+            motif_length: 32
+          - dataset: 3
+            motif_length: 64
+          - dataset: 3
+            motif_length: 128
+
+    steps:
+      - name: Download exact benchmark package
+        uses: actions/download-artifact@v4
+        with:
+          name: prosampler-benchmark-package
+          path: benchmark/package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: SeMinLim/morbius_plus
+          run-id: 31936768291
+
+      - name: Configure compressed and disk-backed swap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo '=== before swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } | tee benchmark/swap_setup.txt
+
+          if command -v zramctl >/dev/null 2>&1 && sudo modprobe zram 2>/dev/null; then
+            ZRAM_DEVICE="$(sudo zramctl --find --size 16G --algorithm zstd 2>/dev/null || true)"
+            if [ -n "$ZRAM_DEVICE" ]; then
+              sudo mkswap "$ZRAM_DEVICE"
+              sudo swapon -p 100 "$ZRAM_DEVICE"
+            fi
+          fi
+
+          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+          RESERVE_BYTES=$((6 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((40 * 1024 * 1024 * 1024))
+          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
+
+          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
+            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
+          fi
+
+          if [ "$FILE_SWAP_BYTES" -ge $((2 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon -p 10 /swapfile
+          fi
+
+          sudo sysctl -w vm.swappiness=100 || true
+          sudo sysctl -w vm.page-cluster=0 || true
+
+          {
+            echo
+            echo '=== after swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } | tee -a benchmark/swap_setup.txt
+
+      - name: Run one single-core ProSampler measurement
+        shell: bash
+        run: |
+          set -u
+
+          mkdir -p benchmark/result benchmark/output
+          chmod +x benchmark/package/ProSampler.bench
+
+          DATASET_ID='${{ matrix.dataset }}'
+          MOTIF_LENGTH='${{ matrix.motif_length }}'
+          INPUT_FILE="benchmark/package/DATASET_DNA_${DATASET_ID}.fa"
+          OUTPUT_PREFIX="benchmark/output/DNA${DATASET_ID}_K${MOTIF_LENGTH}"
+          LOG_FILE="benchmark/result/run.log"
+          TIME_FILE="benchmark/result/time.tsv"
+
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+
+          cp benchmark/swap_setup.txt benchmark/result/swap_setup.txt
+          {
+            echo '=== uname ==='
+            uname -a
+            echo
+            echo '=== lscpu ==='
+            lscpu
+            echo
+            echo "Benchmark CPU ID      : $CPU_ID"
+            echo "Benchmark CPU allowed : $CPU_ALLOWED"
+            echo "Dataset               : DATASET_DNA_${DATASET_ID}.fa"
+            echo "Motif length          : $MOTIF_LENGTH"
+            echo 'Command parameters    : -b 3 -p 1 -l 0 -f 100 -m 1'
+          } > benchmark/result/environment.txt
+
+          TIMEOUT_SECONDS=10800
+          if [ "$MOTIF_LENGTH" -eq 128 ]; then
+            TIMEOUT_SECONDS=1800
+          fi
+
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+          /usr/bin/time \
+            -f '%e\t%U\t%S\t%M\t%x' \
+            -o "$TIME_FILE" \
+            timeout --signal=TERM --kill-after=30s "$TIMEOUT_SECONDS" \
+            taskset -c "$CPU_ID" \
+            benchmark/package/ProSampler.bench \
+              -i "$INPUT_FILE" \
+              -b 3 \
+              -o "$OUTPUT_PREFIX" \
+              -p 1 \
+              -k "$MOTIF_LENGTH" \
+              -l 0 \
+              -f 100 \
+              -m 1 \
+            > "$LOG_FILE" 2>&1
+          COMMAND_RC=$?
+
+          ELAPSED='NA'
+          USER_TIME='NA'
+          SYSTEM_TIME='NA'
+          MAX_RSS='NA'
+          if [ -s "$TIME_FILE" ]; then
+            IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+          fi
+
+          STATUS='COMPLETED'
+          if [ "$COMMAND_RC" -eq 124 ]; then
+            STATUS='TIMEOUT'
+          elif [ "$COMMAND_RC" -eq 137 ] || [ "$COMMAND_RC" -eq 143 ]; then
+            STATUS='KILLED_OR_OOM'
+          elif [ "$COMMAND_RC" -ne 0 ]; then
+            STATUS="FAILED_RC_${COMMAND_RC}"
+          fi
+
+          {
+            echo
+            echo '=== after measurement ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
+          printf 'dataset\tmotif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\n' \
+            > benchmark/result/result.tsv
+          printf 'DATASET_DNA_%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$DATASET_ID" \
+            "$MOTIF_LENGTH" \
+            "$STATUS" \
+            "$ELAPSED" \
+            "$USER_TIME" \
+            "$SYSTEM_TIME" \
+            "$MAX_RSS" \
+            "$COMMAND_RC" \
+            "$CPU_MODEL" \
+            >> benchmark/result/result.tsv
+
+          exit 0
+
+      - name: Upload retry measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prosampler-swap-DNA${{ matrix.dataset }}-K${{ matrix.motif_length }}
+          path: benchmark/result
+          retention-days: 1
+          compression-level: 6
