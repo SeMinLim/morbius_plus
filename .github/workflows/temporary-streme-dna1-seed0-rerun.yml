@@ -1,4 +1,4 @@
-name: Temporary STREME DNA1 Seed0 Rerun
+name: Temporary STREME DNA1 Seed0 W16 Rerun
 
 on:
   push:
@@ -14,11 +14,7 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        motif_length: [4, 8, 16]
+    timeout-minutes: 90
 
     steps:
       - name: Install STREME 5.5.9
@@ -41,7 +37,46 @@ jobs:
           repository: SeMinLim/morbius_plus
           run-id: 31936768291
 
-      - name: Run one single-core STREME measurement
+      - name: Configure swap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p benchmark/result
+          {
+            echo '=== before swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } > benchmark/result/swap_setup.txt
+
+          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((48 * 1024 * 1024 * 1024))
+          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
+
+          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
+            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
+          fi
+
+          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-streme
+            sudo chmod 600 /swapfile-streme
+            sudo mkswap /swapfile-streme
+            sudo swapon -p 10 /swapfile-streme
+            sudo sysctl -w vm.swappiness=100 || true
+            sudo sysctl -w vm.page-cluster=0 || true
+          fi
+
+          {
+            echo
+            echo '=== after swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
+      - name: Run single-core STREME measurement
         shell: micromamba-shell {0}
         env:
           OMP_NUM_THREADS: 1
@@ -55,10 +90,10 @@ jobs:
           mkdir -p benchmark/result benchmark/output
 
           INPUT_FILE='benchmark/package/DATASET_DNA_1.fa'
-          MOTIF_LENGTH='${{ matrix.motif_length }}'
-          OUTPUT_DIR="benchmark/output/W${MOTIF_LENGTH}"
-          TIME_FILE="benchmark/result/time.tsv"
-          LOG_FILE="benchmark/result/run.log"
+          MOTIF_LENGTH='16'
+          OUTPUT_DIR='benchmark/output/W16'
+          TIME_FILE='benchmark/result/time.tsv'
+          LOG_FILE='benchmark/result/run.log'
           STREME_BIN="$(command -v streme)"
           CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
           CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
@@ -74,7 +109,7 @@ jobs:
             echo "Input           : DATASET_DNA_1.fa"
             echo "Input SHA-256   : $(sha256sum "$INPUT_FILE" | awk '{print $1}')"
             echo "Motif length    : $MOTIF_LENGTH"
-            echo "Parameters      : --dna --w $MOTIF_LENGTH --nmotifs 1 --order 2 --seed 0"
+            echo "Parameters      : --dna --w 16 --nmotifs 1 --order 2 --seed 0"
             echo "Strand mode     : standard DNA search including reverse complements"
           } > benchmark/result/environment.txt
 
@@ -89,7 +124,7 @@ jobs:
             "$STREME_BIN" \
               --p "$INPUT_FILE" \
               --dna \
-              --w "$MOTIF_LENGTH" \
+              --w 16 \
               --nmotifs 1 \
               --order 2 \
               --seed 0 \
@@ -127,80 +162,21 @@ jobs:
             "$STREME_VERSION" \
             >> benchmark/result/result.tsv
 
+          {
+            echo
+            echo '=== after measurement ==='
+            free -h
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
           cat benchmark/result/result.tsv
           exit "$COMMAND_RC"
 
-      - name: Upload one STREME measurement
+      - name: Upload STREME measurement
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: streme-dna1-seed0-W${{ matrix.motif_length }}
+          name: streme-dna1-seed0-W16-swap
           path: benchmark/result
-          retention-days: 1
-          compression-level: 6
-
-  collect:
-    needs: benchmark
-    if: always()
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Download measurement artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: streme-dna1-seed0-W*
-          path: collected
-          merge-multiple: false
-
-      - name: Aggregate results
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p final
-
-          python3 - <<'PY'
-          import csv
-          from pathlib import Path
-
-          rows = []
-          for path in Path('collected').rglob('result.tsv'):
-              with path.open(newline='') as input_file:
-                  rows.extend(csv.DictReader(input_file, delimiter='\t'))
-
-          rows.sort(key=lambda row: int(row['motif_length']))
-          fields = [
-              'motif_length',
-              'status',
-              'elapsed_seconds',
-              'user_seconds',
-              'system_seconds',
-              'max_rss_kb',
-              'exit_code',
-              'cpu_model',
-              'streme_version',
-          ]
-
-          with Path('final/streme_dna1_seed0.tsv').open('w', newline='') as output_file:
-              writer = csv.DictWriter(
-                  output_file,
-                  fieldnames=fields,
-                  delimiter='\t',
-                  lineterminator='\n',
-              )
-              writer.writeheader()
-              writer.writerows(rows)
-
-          if len(rows) != 3:
-              raise RuntimeError(f'Expected 3 measurements, found {len(rows)}')
-          PY
-
-          cp -a collected final/individual_measurements
-          cat final/streme_dna1_seed0.tsv
-
-      - name: Upload complete STREME results
-        uses: actions/upload-artifact@v4
-        with:
-          name: streme-dna1-seed0-results
-          path: final
           retention-days: 1
           compression-level: 6
