@@ -125,13 +125,13 @@ jobs:
             echo "STREME version        : $STREME_VERSION"
             echo "Dataset               : DATASET_DNA_${DATASET_ID}.fa"
             echo "Motif length          : $MOTIF_LENGTH"
-            echo 'Command parameters    : --dna --norc --w <length> --nmotifs 1 --order 2 --seed 0'
+            echo 'Command parameters    : --dna --dna2rna --w <length> --nmotifs 1 --order 2 --seed 0'
           } > benchmark/result/environment.txt
 
-          if ! "$STREME_BIN" --help 2>&1 | grep -q -- '--norc'; then
-            echo 'The installed STREME does not expose --norc.' > "$LOG_FILE"
+          if ! "$STREME_BIN" --help 2>&1 | grep -q -- '--dna2rna'; then
+            echo 'The installed STREME does not expose --dna2rna.' > "$LOG_FILE"
             COMMAND_RC=2
-            STATUS='FAILED_NO_NORC_OPTION'
+            STATUS='FAILED_NO_DNA2RNA_OPTION'
             ELAPSED='NA'
             USER_TIME='NA'
             SYSTEM_TIME='NA'
@@ -149,7 +149,7 @@ jobs:
               "$STREME_BIN" \
                 --p "$INPUT_FILE" \
                 --dna \
-                --norc \
+                --dna2rna \
                 --w "$MOTIF_LENGTH" \
                 --nmotifs 1 \
                 --order 2 \
