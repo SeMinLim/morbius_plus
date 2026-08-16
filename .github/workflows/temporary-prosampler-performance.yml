@@ -58,6 +58,8 @@ jobs:
 
           EXPECTED_JASPAR_SHA='b2cfd18e34f7ed8362813b175b1db984946b396a03aaca4e4b4ca91f0a012dac'
           JASPAR_URLS=(
+            'https://jaspar2020.genereg.net/download/data/2020/sites/MA0007.2.sites'
+            'https://jaspar2018.genereg.net/download/data/2018/sites/MA0007.2.sites'
             'https://jaspar2018.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
             'https://jaspar2020.genereg.net/html/DOWNLOAD/sites/MA0007.2.sites'
             'https://jaspar.uio.no/html/DOWNLOAD/sites/MA0007.2.sites'
