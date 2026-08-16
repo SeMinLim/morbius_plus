@@ -1,4 +1,4 @@
-name: Temporary STREME Performance Measurement
+name: Temporary STREME Forward-Strand Performance Measurement
 
 on:
   push:
@@ -92,11 +92,12 @@ jobs:
         run: |
           set -u
 
-          mkdir -p benchmark/result benchmark/output
+          mkdir -p benchmark/result benchmark/output benchmark/forward_input
 
           DATASET_ID='${{ matrix.dataset }}'
           MOTIF_LENGTH='${{ matrix.motif_length }}'
-          INPUT_FILE="benchmark/package/DATASET_DNA_${DATASET_ID}.fa"
+          DNA_INPUT_FILE="benchmark/package/DATASET_DNA_${DATASET_ID}.fa"
+          INPUT_FILE="benchmark/forward_input/DATASET_DNA_${DATASET_ID}_forward.fa"
           OUTPUT_DIR="benchmark/output/DNA${DATASET_ID}_W${MOTIF_LENGTH}"
           LOG_FILE="benchmark/result/run.log"
           TIME_FILE="benchmark/result/time.tsv"
@@ -107,8 +108,8 @@ jobs:
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
           STREME_VERSION="$($STREME_BIN --version 2>&1 | head -n 1)"
 
-          sha256sum "$INPUT_FILE" > benchmark/result/input_checksum.sha256
-          "$STREME_BIN" --help > benchmark/result/streme_help.txt 2>&1 || true
+          tr 'Tt' 'Uu' < "$DNA_INPUT_FILE" > "$INPUT_FILE"
+          sha256sum "$DNA_INPUT_FILE" > benchmark/result/input_checksum.sha256
 
           {
             echo '=== uname ==='
@@ -126,7 +127,8 @@ jobs:
             echo "STREME version        : $STREME_VERSION"
             echo "Dataset               : DATASET_DNA_${DATASET_ID}.fa"
             echo "Motif length          : $MOTIF_LENGTH"
-            echo 'Command parameters    : --dna --w <length> --nmotifs 1 --order 2 --seed 0'
+            echo 'Strand mode           : forward only (T-to-U alphabet conversion; STREME --rna)'
+            echo 'Command parameters    : --rna --w <length> --nmotifs 1 --order 2 --seed 0'
           } > benchmark/result/environment.txt
 
           sync
@@ -140,7 +142,7 @@ jobs:
             taskset -c "$CPU_ID" \
             "$STREME_BIN" \
               --p "$INPUT_FILE" \
-              --dna \
+              --rna \
               --w "$MOTIF_LENGTH" \
               --nmotifs 1 \
               --order 2 \
@@ -202,7 +204,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: streme-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
+          name: streme-forward-DNA${{ matrix.dataset }}-W${{ matrix.motif_length }}
           path: benchmark/result
           retention-days: 1
           compression-level: 6
@@ -216,7 +218,7 @@ jobs:
       - name: Download measurement artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: streme-DNA*-W*
+          pattern: streme-forward-DNA*-W*
           path: collected
           merge-multiple: false
 
@@ -255,7 +257,7 @@ jobs:
               'streme_version',
           ]
 
-          with Path('final/streme_elapsed_time.tsv').open('w', newline='') as output_file:
+          with Path('final/streme_forward_elapsed_time.tsv').open('w', newline='') as output_file:
               writer = csv.DictWriter(
                   output_file,
                   fieldnames=fields,
@@ -270,12 +272,12 @@ jobs:
           PY
 
           cp -a collected final/individual_measurements
-          cat final/streme_elapsed_time.tsv
+          cat final/streme_forward_elapsed_time.tsv
 
       - name: Upload complete STREME results
         uses: actions/upload-artifact@v4
         with:
-          name: streme-performance-results
+          name: streme-forward-performance-results
           path: final
           retention-days: 1
           compression-level: 6
