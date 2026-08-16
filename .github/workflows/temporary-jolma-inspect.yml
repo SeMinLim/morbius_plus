@@ -1,0 +1,30 @@
+name: Temporary Jolma Archive Inspection
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-jolma-inspect.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Jolma archive paths
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 --retry-delay 2 \
+            'https://meme-suite.org/meme-software/Databases/motifs/motif_databases.12.19.tgz' \
+            -o motif_databases.12.19.tgz
+          tar -tzf motif_databases.12.19.tgz | grep -i 'jolma' | tee jolma_paths.txt
+
+      - name: Upload path list
+        uses: actions/upload-artifact@v4
+        with:
+          name: jolma-paths
+          path: jolma_paths.txt
+          retention-days: 1
