@@ -49,6 +49,7 @@ jobs:
               if line.startswith('          '):
                   line = line[10:]
               if line.startswith('JOLMA_PATH='):
+                  line = line.replace('Jolma2013', 'jolma2013')
                   line = line.replace('| head -n 1)"', '| head -n 1 || true)"')
               script_lines.append(line)
 
