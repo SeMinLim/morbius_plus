@@ -50,41 +50,37 @@ jobs:
           repository: SeMinLim/morbius_plus
           run-id: 31936768291
 
-      - name: Configure compressed and disk-backed swap
+      - name: Configure disk-backed swap
         shell: bash
         run: |
           set -euo pipefail
 
+          mkdir -p benchmark/result
           {
             echo '=== before swap ==='
             free -h
             df -h /
             swapon --show || true
-          } | tee benchmark/swap_setup.txt
-
-          if command -v zramctl >/dev/null 2>&1 && sudo modprobe zram 2>/dev/null; then
-            ZRAM_DEVICE="$(sudo zramctl --find --size 16G --algorithm zstd 2>/dev/null || true)"
-            if [ -n "$ZRAM_DEVICE" ]; then
-              sudo mkswap "$ZRAM_DEVICE"
-              sudo swapon -p 100 "$ZRAM_DEVICE"
-            fi
-          fi
+          } | tee benchmark/result/swap_setup.txt
 
           FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-          RESERVE_BYTES=$((6 * 1024 * 1024 * 1024))
-          MAX_SWAP_BYTES=$((40 * 1024 * 1024 * 1024))
+          RESERVE_BYTES=$((10 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((60 * 1024 * 1024 * 1024))
           FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
 
           if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
             FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
           fi
 
-          if [ "$FILE_SWAP_BYTES" -ge $((2 * 1024 * 1024 * 1024)) ]; then
-            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile
-            sudo swapon -p 10 /swapfile
+          if [ "$FILE_SWAP_BYTES" -lt $((8 * 1024 * 1024 * 1024)) ]; then
+            echo 'Insufficient disk space for the high-memory benchmark.' >&2
+            exit 1
           fi
+
+          sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-prosampler
+          sudo chmod 600 /swapfile-prosampler
+          sudo mkswap /swapfile-prosampler
+          sudo swapon -p 10 /swapfile-prosampler
 
           sudo sysctl -w vm.swappiness=100 || true
           sudo sysctl -w vm.page-cluster=0 || true
@@ -95,7 +91,7 @@ jobs:
             free -h
             df -h /
             swapon --show || true
-          } | tee -a benchmark/swap_setup.txt
+          } | tee -a benchmark/result/swap_setup.txt
 
       - name: Run one single-core ProSampler measurement
         shell: bash
@@ -116,7 +112,6 @@ jobs:
           CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
 
-          cp benchmark/swap_setup.txt benchmark/result/swap_setup.txt
           {
             echo '=== uname ==='
             uname -a
