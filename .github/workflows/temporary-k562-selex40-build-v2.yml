@@ -35,6 +35,7 @@ jobs:
         shell: micromamba-shell {0}
         run: |
           python - <<'PY'
+          import re
           from pathlib import Path
 
           workflow = Path('.github/workflows/temporary-k562-selex40-build.yml').read_text()
@@ -54,11 +55,14 @@ jobs:
               script_lines.append(line)
 
           script = '\n'.join(script_lines) + '\n'
-          old_expression = "matches = sorted(set(motif_lookup.get(reference_key, [])))"
-          new_expression = "matches = sorted({motif_id for motif_id, _ in motif_entries if motif_id == row['reference_motif_name'].replace(' ', '_')})"
-          if old_expression not in script:
-              raise RuntimeError('Motif-resolution expression was not found in the source workflow.')
-          script = script.replace(old_expression, new_expression)
+          replacement = "matches = sorted({motif_id for motif_id, _ in motif_entries if motif_id == row['reference_motif_name'].replace(' ', '_')})"
+          script, replacement_num = re.subn(
+              r"matches\s*=\s*sorted\(set\(motif_lookup\.get\(reference_key,\s*\[\]\)\)\)",
+              replacement,
+              script,
+          )
+          if replacement_num != 1:
+              raise RuntimeError(f'Unexpected motif-resolution replacement count: {replacement_num}')
 
           Path('/tmp/build_k562_selex40.sh').write_text(script)
           PY
