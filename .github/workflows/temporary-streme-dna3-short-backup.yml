@@ -1,0 +1,206 @@
+name: Temporary STREME DNA3 Short Backup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-streme-dna3-short-backup.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        motif_length: [4, 8]
+
+    steps:
+      - name: Install STREME 5.5.9
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: streme-benchmark
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            meme=5.5.9
+          cache-environment: true
+          init-shell: bash
+
+      - name: Download exact synthetic DNA dataset
+        uses: actions/download-artifact@v4
+        with:
+          name: prosampler-benchmark-package
+          path: benchmark/package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: SeMinLim/morbius_plus
+          run-id: 31936768291
+
+      - name: Measure one motif length on one CPU core
+        shell: micromamba-shell {0}
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          VECLIB_MAXIMUM_THREADS: 1
+          NUMEXPR_NUM_THREADS: 1
+        run: |
+          set -u
+
+          mkdir -p benchmark/result benchmark/output
+
+          INPUT_FILE='benchmark/package/DATASET_DNA_3.fa'
+          MOTIF_LENGTH='${{ matrix.motif_length }}'
+          OUTPUT_DIR="benchmark/output/W${MOTIF_LENGTH}"
+          TIME_FILE='benchmark/result/time.tsv'
+          LOG_FILE='benchmark/result/run.log'
+          STREME_BIN="$(command -v streme)"
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          STREME_VERSION="$($STREME_BIN --version 2>&1 | head -n 1)"
+
+          sha256sum "$INPUT_FILE" > benchmark/result/input_checksum.sha256
+          {
+            echo "CPU model       : $CPU_MODEL"
+            echo "CPU allowed     : $CPU_ALLOWED"
+            echo "Pinned CPU      : $CPU_ID"
+            echo "STREME version  : $STREME_VERSION"
+            echo "Input           : DATASET_DNA_3.fa"
+            echo "Input SHA-256   : $(sha256sum "$INPUT_FILE" | awk '{print $1}')"
+            echo "Motif length    : $MOTIF_LENGTH"
+            echo "Parameters      : --dna --w $MOTIF_LENGTH --nmotifs 1 --order 2 --seed 0"
+            echo "Strand mode     : standard DNA search including reverse complements"
+          } > benchmark/result/environment.txt
+
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+          set +e
+          /usr/bin/time \
+            -f '%e\t%U\t%S\t%M\t%x' \
+            -o "$TIME_FILE" \
+            taskset -c "$CPU_ID" \
+            "$STREME_BIN" \
+              --p "$INPUT_FILE" \
+              --dna \
+              --w "$MOTIF_LENGTH" \
+              --nmotifs 1 \
+              --order 2 \
+              --seed 0 \
+              --oc "$OUTPUT_DIR" \
+            > "$LOG_FILE" 2>&1
+          COMMAND_RC=$?
+          set -e
+
+          ELAPSED='NA'
+          USER_TIME='NA'
+          SYSTEM_TIME='NA'
+          MAX_RSS='NA'
+          if [ -s "$TIME_FILE" ]; then
+            IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+          fi
+
+          STATUS='COMPLETED'
+          if [ "$COMMAND_RC" -ne 0 ]; then
+            STATUS="FAILED_RC_${COMMAND_RC}"
+          elif [ ! -s "$OUTPUT_DIR/streme.txt" ]; then
+            STATUS='FAILED_NO_RESULT'
+          fi
+
+          printf 'motif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\tstreme_version\n' \
+            > benchmark/result/result.tsv
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$MOTIF_LENGTH" \
+            "$STATUS" \
+            "$ELAPSED" \
+            "$USER_TIME" \
+            "$SYSTEM_TIME" \
+            "$MAX_RSS" \
+            "$COMMAND_RC" \
+            "$CPU_MODEL" \
+            "$STREME_VERSION" \
+            >> benchmark/result/result.tsv
+
+          cat benchmark/result/result.tsv
+          exit "$COMMAND_RC"
+
+      - name: Upload measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: streme-dna3-seed0-backup-W${{ matrix.motif_length }}
+          path: benchmark/result
+          retention-days: 1
+          compression-level: 6
+
+  collect:
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download measurements
+        uses: actions/download-artifact@v4
+        with:
+          pattern: streme-dna3-seed0-backup-W*
+          path: collected
+          merge-multiple: false
+
+      - name: Aggregate measurements
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p final
+
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+
+          rows = []
+          for path in Path('collected').rglob('result.tsv'):
+              with path.open(newline='') as input_file:
+                  rows.extend(csv.DictReader(input_file, delimiter='\t'))
+
+          rows.sort(key=lambda row: int(row['motif_length']))
+          fields = [
+              'motif_length',
+              'status',
+              'elapsed_seconds',
+              'user_seconds',
+              'system_seconds',
+              'max_rss_kb',
+              'exit_code',
+              'cpu_model',
+              'streme_version',
+          ]
+
+          with Path('final/streme_dna3_seed0_short.tsv').open('w', newline='') as output_file:
+              writer = csv.DictWriter(
+                  output_file,
+                  fieldnames=fields,
+                  delimiter='\t',
+                  lineterminator='\n',
+              )
+              writer.writeheader()
+              writer.writerows(rows)
+
+          if len(rows) != 2:
+              raise RuntimeError(f'Expected 2 measurements, found {len(rows)}')
+          PY
+
+          cp -a collected final/individual_measurements
+          cat final/streme_dna3_seed0_short.tsv
+
+      - name: Upload complete measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: streme-dna3-seed0-short-results
+          path: final
+          retention-days: 1
+          compression-level: 6
