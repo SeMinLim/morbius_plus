@@ -1,0 +1,213 @@
+name: Temporary HOMER DNA1 W16 EPYC9V74 Benchmark
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-homer-dna1-w16-9v74.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4]
+
+    steps:
+      - name: Require AMD EPYC 9V74
+        shell: bash
+        run: |
+          set -euo pipefail
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          echo "CPU model: $CPU_MODEL"
+          if [[ "$CPU_MODEL" != *"AMD EPYC 9V74"* ]]; then
+            echo 'This attempt is not running on the required CPU.'
+            exit 78
+          fi
+
+      - name: Install HOMER 5.1 and MEME Suite 5.5.9
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: homer-benchmark
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            homer=5.1
+            meme=5.5.9
+          cache-environment: true
+          init-shell: bash
+
+      - name: Download exact synthetic DNA dataset
+        uses: actions/download-artifact@v4
+        with:
+          name: prosampler-benchmark-package
+          path: benchmark/package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: SeMinLim/morbius_plus
+          run-id: 31936768291
+
+      - name: Generate matched control dataset
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark/control benchmark/result benchmark/output
+          INPUT_FILE='benchmark/package/DATASET_DNA_1.fa'
+          CONTROL_FILE='benchmark/control/DATASET_DNA_1_control.fa'
+
+          fasta-shuffle-letters \
+            -dna \
+            -kmer 3 \
+            -seed 0 \
+            -line 1000 \
+            -tag _control \
+            "$INPUT_FILE" \
+            "$CONTROL_FILE"
+
+          if [ "$(grep -c '^>' "$INPUT_FILE")" -ne 32768 ] || \
+             [ "$(grep -c '^>' "$CONTROL_FILE")" -ne 32768 ]; then
+            echo 'Unexpected FASTA record count.' >&2
+            exit 1
+          fi
+
+          sha256sum "$INPUT_FILE" "$CONTROL_FILE" \
+            > benchmark/result/input_and_control_checksums.sha256
+
+      - name: Configure swap
+        shell: bash
+        run: |
+          set -euo pipefail
+          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((40 * 1024 * 1024 * 1024))
+          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
+
+          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
+            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
+          fi
+
+          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-homer
+            sudo chmod 600 /swapfile-homer
+            sudo mkswap /swapfile-homer
+            sudo swapon -p 10 /swapfile-homer
+            sudo sysctl -w vm.swappiness=100 || true
+            sudo sysctl -w vm.page-cluster=0 || true
+          fi
+
+          {
+            free -h
+            df -h /
+            swapon --show || true
+          } > benchmark/result/swap_setup.txt
+
+      - name: Measure HOMER width 16 on one CPU core
+        shell: micromamba-shell {0}
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          VECLIB_MAXIMUM_THREADS: 1
+          NUMEXPR_NUM_THREADS: 1
+          MALLOC_ARENA_MAX: 2
+        run: |
+          set -u
+
+          INPUT_FILE='benchmark/package/DATASET_DNA_1.fa'
+          CONTROL_FILE='benchmark/control/DATASET_DNA_1_control.fa'
+          OUTPUT_DIR='benchmark/output/W16'
+          TIME_FILE='benchmark/result/time.tsv'
+          LOG_FILE='benchmark/result/run.log'
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          HOMER_VERSION="$(micromamba list homer | awk '$1 == "homer" {print $2; exit}')"
+
+          {
+            echo "Attempt         : ${{ matrix.attempt }}"
+            echo "CPU model       : $CPU_MODEL"
+            echo "CPU allowed     : $CPU_ALLOWED"
+            echo "Pinned CPU      : $CPU_ID"
+            echo "HOMER version   : $HOMER_VERSION"
+            echo "Input           : DATASET_DNA_1.fa"
+            echo "Motif length    : 16"
+            echo "Parameters      : -basic -len 16 -S 1 -noknown -noweight -norevopp -p 1"
+            echo "Control         : 3-mer-preserving shuffle, seed 0"
+            echo "Time limit      : 5400 seconds"
+          } > benchmark/result/environment.txt
+
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+          set +e
+          /usr/bin/time \
+            -f '%e\t%U\t%S\t%M\t%x' \
+            -o "$TIME_FILE" \
+            timeout --signal=TERM --kill-after=60s 5400s \
+            taskset -c "$CPU_ID" \
+            findMotifs.pl \
+              "$INPUT_FILE" \
+              fasta \
+              "$OUTPUT_DIR" \
+              -fastaBg "$CONTROL_FILE" \
+              -basic \
+              -len 16 \
+              -S 1 \
+              -noknown \
+              -noweight \
+              -norevopp \
+              -p 1 \
+            > "$LOG_FILE" 2>&1
+          COMMAND_RC=$?
+          set -e
+
+          ELAPSED='NA'
+          USER_TIME='NA'
+          SYSTEM_TIME='NA'
+          MAX_RSS='NA'
+          if [ -s "$TIME_FILE" ]; then
+            IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+          fi
+
+          STATUS='COMPLETED'
+          if [ "$COMMAND_RC" -eq 124 ] || [ "$COMMAND_RC" -eq 137 ]; then
+            STATUS='TIMEOUT_5400S'
+          elif [ "$COMMAND_RC" -ne 0 ]; then
+            STATUS="FAILED_RC_${COMMAND_RC}"
+          elif [ ! -s "$OUTPUT_DIR/homerMotifs.motifs16" ]; then
+            STATUS='FAILED_NO_MOTIF'
+          fi
+
+          printf 'motif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\thomer_version\n' \
+            > benchmark/result/result.tsv
+          printf '16\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$STATUS" \
+            "$ELAPSED" \
+            "$USER_TIME" \
+            "$SYSTEM_TIME" \
+            "$MAX_RSS" \
+            "$COMMAND_RC" \
+            "$CPU_MODEL" \
+            "$HOMER_VERSION" \
+            >> benchmark/result/result.tsv
+
+          if [ -s "$OUTPUT_DIR/motifFindingParameters.txt" ]; then
+            cp "$OUTPUT_DIR/motifFindingParameters.txt" benchmark/result/motifFindingParameters.txt
+          fi
+
+          cat benchmark/result/result.tsv
+
+      - name: Upload HOMER measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homer-dna1-W16-9v74-attempt${{ matrix.attempt }}
+          path: benchmark/result
+          retention-days: 1
+          compression-level: 6
