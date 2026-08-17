@@ -4,10 +4,124 @@
 #include <cmath>
 #include <limits>
 #include <stdio.h>
+#include <stdlib.h>
 #include <thread>
 #include <vector>
 using namespace std;
 
+
+#define PWLFRACTIONBITS 12
+#define PWLCOEFFICIENTFRACTIONBITS 18
+#define PWLRESIDUALBITS 8
+#define PWLSEGMENTNUM 16
+
+
+static const uint32_t LOG2PWLBASE[PWLSEGMENTNUM] = {
+	0, 22928, 44545, 64993,
+	84392, 102844, 120437, 137249,
+	153344, 168783, 183616, 197889,
+	211643, 224915, 237736, 250137
+};
+
+static const uint32_t LOG2PWLDELTA[PWLSEGMENTNUM] = {
+	22928, 21617, 20448, 19399,
+	18452, 17594, 16811, 16096,
+	15439, 14833, 14273, 13754,
+	13271, 12821, 12401, 12007
+};
+
+static const uint32_t EXP2PWLBASE[PWLSEGMENTNUM] = {
+	262144, 251030, 240387, 230195,
+	220436, 211090, 202141, 193571,
+	185364, 177505, 169979, 162773,
+	155872, 149263, 142935, 136875
+};
+
+static const uint32_t EXP2PWLDELTA[PWLSEGMENTNUM] = {
+	11114, 10643, 10192, 9760,
+	9346, 8950, 8570, 8207,
+	7859, 7526, 7207, 6901,
+	6608, 6328, 6060, 5803
+};
+
+
+// Calculate one 16-segment PWL value with the shared arithmetic structure
+static uint32_t calculatePWLValue( const uint32_t *baseTable,
+				   const uint32_t *deltaTable,
+				   uint32_t fractionCode,
+				   bool subtractCorrection ) {
+	uint32_t segmentIdx = fractionCode >> PWLRESIDUALBITS;
+	uint32_t residualMask = (1U << PWLRESIDUALBITS) - 1U;
+	uint32_t residual = fractionCode & residualMask;
+	uint64_t product = (uint64_t)deltaTable[segmentIdx] * (uint64_t)residual;
+	uint32_t correction = (uint32_t)((product + (1U << (PWLRESIDUALBITS - 1))) >>
+					 PWLRESIDUALBITS);
+
+	if ( subtractCorrection ) return baseTable[segmentIdx] - correction;
+	return baseTable[segmentIdx] + correction;
+}
+
+// Approximate log2(count) with the 16-segment LPM PWL datapath
+static double calculateLog2PWL( uint32_t count ) {
+	if ( count == 0 ) {
+		printf( "Invalid zero BPM count for LPM conversion.\n" );
+		fflush( stdout );
+		exit(1);
+	}
+
+	uint32_t integerPart = 0;
+	uint32_t normalizedCount = count;
+	while ( normalizedCount > 1 ) {
+		normalizedCount = normalizedCount >> 1;
+		integerPart ++;
+	}
+
+	uint32_t leadingOne = 1U << integerPart;
+	uint64_t fractionNumerator =
+		(uint64_t)(count - leadingOne) << PWLFRACTIONBITS;
+	uint32_t fractionCode = (uint32_t)(fractionNumerator / leadingOne);
+	uint32_t fractionMaximum = (1U << PWLFRACTIONBITS) - 1U;
+	if ( fractionCode > fractionMaximum ) fractionCode = fractionMaximum;
+
+	uint32_t fractionQ18 = calculatePWLValue(LOG2PWLBASE,
+						   LOG2PWLDELTA,
+						   fractionCode,
+						   false);
+	uint32_t outputShift = PWLCOEFFICIENTFRACTIONBITS - PWLFRACTIONBITS;
+	uint32_t fractionQ12 =
+		(fractionQ18 + (1U << (outputShift - 1))) >> outputShift;
+	if ( fractionQ12 >= (1U << PWLFRACTIONBITS) ) {
+		integerPart ++;
+		fractionQ12 = fractionQ12 - (1U << PWLFRACTIONBITS);
+	}
+
+	return (double)integerPart +
+	       (double)fractionQ12 / (double)(1U << PWLFRACTIONBITS);
+}
+
+// Approximate 2^(-difference) with the 16-segment WeightProducer PWL datapath
+static double calculateExp2NegativePWL( double difference ) {
+	if ( difference < 0.0 ) {
+		printf( "Invalid negative exponent difference for WeightProducer.\n" );
+		fflush( stdout );
+		exit(1);
+	}
+
+	uint64_t differenceQ12 =
+		(uint64_t)llround(difference * (double)(1U << PWLFRACTIONBITS));
+	uint32_t integerPart = (uint32_t)(differenceQ12 >> PWLFRACTIONBITS);
+	uint32_t fractionCode =
+		(uint32_t)(differenceQ12 & ((1U << PWLFRACTIONBITS) - 1U));
+	uint32_t fractionQ18 = calculatePWLValue(EXP2PWLBASE,
+						   EXP2PWLDELTA,
+						   fractionCode,
+						   true);
+
+	if ( integerPart > PWLCOEFFICIENTFRACTIONBITS ) return 0.0;
+	uint32_t weightQ18 = fractionQ18 >> integerPart;
+	return (double)weightQ18 /
+	       (double)(1U << PWLCOEFFICIENTFRACTIONBITS);
+}
 
 // Initialize offsets with fixed-rate support-guided initialization
 void initializeOffsets( const Config *config,
@@ -57,7 +171,9 @@ void buildBPM( const Config *config,
 // Build a complete LPM
 void buildLPM( const vector<uint32_t> &bpm, vector<double> &lpm ) {
 	lpm.resize(bpm.size());
-	for ( size_t i = 0; i < bpm.size(); i ++ ) lpm[i] = log2((double)bpm[i]);
+	for ( size_t i = 0; i < bpm.size(); i ++ ) {
+		lpm[i] = calculateLog2PWL(bpm[i]);
+	}
 }
 
 // Calculate the overall consensus agreement score
@@ -140,7 +256,8 @@ uint32_t sampleCandidate( const Config *config,
 		int segmentExponent = (int)ceil(segmentMaximum);
 		double segmentMass = 0.0;
 		for ( size_t localIdx = 0; localIdx < segmentCandidateNum; localIdx ++ ) {
-			weight[localIdx] = exp2(logProb[localIdx] - (double)segmentExponent);
+			double difference = (double)segmentExponent - logProb[localIdx];
+			weight[localIdx] = calculateExp2NegativePWL(difference);
 			segmentMass = segmentMass + weight[localIdx];
 		}
 
@@ -263,9 +380,9 @@ void runPipeline( const Config *config,
 			state.bpm[(size_t)nextOldSymbol * config->motifLength + column] --;
 			if ( newSymbol != nextOldSymbol ) {
 				state.lpm[(size_t)newSymbol * config->motifLength + column] =
-					log2((double)state.bpm[(size_t)newSymbol * config->motifLength + column]);
+					calculateLog2PWL(state.bpm[(size_t)newSymbol * config->motifLength + column]);
 				state.lpm[(size_t)nextOldSymbol * config->motifLength + column] =
-					log2((double)state.bpm[(size_t)nextOldSymbol * config->motifLength + column]);
+					calculateLog2PWL(state.bpm[(size_t)nextOldSymbol * config->motifLength + column]);
 			}
 		}
 	}
