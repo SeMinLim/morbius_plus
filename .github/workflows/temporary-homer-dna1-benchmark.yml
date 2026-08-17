@@ -17,13 +17,14 @@ jobs:
     timeout-minutes: 300
 
     steps:
-      - name: Install MEME Suite for matched control generation
+      - name: Install HOMER 5.1 and MEME Suite 5.5.9
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: homer-benchmark
           create-args: >-
             -c conda-forge
             -c bioconda
+            homer=5.1
             meme=5.5.9
           cache-environment: true
           init-shell: bash
@@ -36,25 +37,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: SeMinLim/morbius_plus
           run-id: 31936768291
-
-      - name: Install HOMER 5.1
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential perl wget unzip zip
-
-          mkdir -p benchmark/homer
-          cd benchmark/homer
-
-          wget --tries=5 --timeout=30 \
-            'https://homer.ucsd.edu/homer/configureHomer.pl' \
-            -O configureHomer.pl
-
-          perl configureHomer.pl -install homer -version v5.1
-          test -x bin/homer2
-          test -x bin/findMotifs.pl
 
       - name: Generate deterministic 3-mer-preserving control dataset
         shell: micromamba-shell {0}
@@ -167,7 +149,7 @@ jobs:
           } >> benchmark/result/swap_setup.txt
 
       - name: Measure HOMER on one CPU core
-        shell: bash
+        shell: micromamba-shell {0}
         env:
           OMP_NUM_THREADS: 1
           OPENBLAS_NUM_THREADS: 1
@@ -178,15 +160,13 @@ jobs:
         run: |
           set -u
 
-          export PATH="$PWD/benchmark/homer/bin:$PATH"
-
           INPUT_FILE='benchmark/package/DATASET_DNA_1.fa'
           CONTROL_FILE='benchmark/control/DATASET_DNA_1_control.fa'
           CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
           CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
           CPU_MHZ="$(lscpu | awk -F: '/CPU max MHz/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
-          HOMER_VERSION="$(grep -E '^HOMER' benchmark/homer/config.txt 2>/dev/null | head -n 1 || true)"
+          HOMER_VERSION="$(micromamba list homer | awk '$1 == "homer" {print $2; exit}')"
 
           printf 'motif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tmotif_num\tcpu_model\thomer_version\n' \
             > benchmark/result/homer_dna1.tsv
