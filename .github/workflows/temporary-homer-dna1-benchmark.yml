@@ -1,0 +1,303 @@
+name: Temporary HOMER DNA1 Benchmark
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-homer-dna1-benchmark.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+
+    steps:
+      - name: Install MEME Suite for matched control generation
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: homer-benchmark
+          create-args: >-
+            -c conda-forge
+            -c bioconda
+            meme=5.5.9
+          cache-environment: true
+          init-shell: bash
+
+      - name: Download exact synthetic DNA dataset
+        uses: actions/download-artifact@v4
+        with:
+          name: prosampler-benchmark-package
+          path: benchmark/package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: SeMinLim/morbius_plus
+          run-id: 31936768291
+
+      - name: Install HOMER 5.1
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential perl wget unzip zip
+
+          mkdir -p benchmark/homer
+          cd benchmark/homer
+
+          wget --tries=5 --timeout=30 \
+            'https://homer.ucsd.edu/homer/configureHomer.pl' \
+            -O configureHomer.pl
+
+          perl configureHomer.pl -install homer -version v5.1
+          test -x bin/homer2
+          test -x bin/findMotifs.pl
+
+      - name: Generate deterministic 3-mer-preserving control dataset
+        shell: micromamba-shell {0}
+        run: |
+          set -euo pipefail
+
+          mkdir -p benchmark/control benchmark/result
+
+          INPUT_FILE='benchmark/package/DATASET_DNA_1.fa'
+          CONTROL_FILE='benchmark/control/DATASET_DNA_1_control.fa'
+          SHUFFLER="$(command -v fasta-shuffle-letters || true)"
+
+          if [ -z "$SHUFFLER" ]; then
+            SHUFFLER="$(find "$CONDA_PREFIX" -type f -name fasta-shuffle-letters | head -n 1)"
+          fi
+
+          if [ -z "$SHUFFLER" ] || [ ! -x "$SHUFFLER" ]; then
+            echo 'fasta-shuffle-letters was not found.' >&2
+            exit 1
+          fi
+
+          "$SHUFFLER" \
+            -dna \
+            -kmer 3 \
+            -seed 0 \
+            -line 1000 \
+            -tag _control \
+            "$INPUT_FILE" \
+            "$CONTROL_FILE"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def read_fasta(path):
+              header = None
+              sequence = []
+              with Path(path).open() as input_file:
+                  for raw_line in input_file:
+                      line = raw_line.strip()
+                      if not line:
+                          continue
+                      if line.startswith('>'):
+                          if header is not None:
+                              yield header, ''.join(sequence)
+                          header = line[1:].split()[0]
+                          sequence = []
+                      else:
+                          sequence.append(line.upper())
+                  if header is not None:
+                      yield header, ''.join(sequence)
+
+          input_records = list(read_fasta('benchmark/package/DATASET_DNA_1.fa'))
+          control_records = list(read_fasta('benchmark/control/DATASET_DNA_1_control.fa'))
+
+          if len(input_records) != 32768 or len(control_records) != 32768:
+              raise RuntimeError(
+                  f'Unexpected record counts: {len(input_records)}, {len(control_records)}'
+              )
+
+          for idx, ((_, input_sequence), (_, control_sequence)) in enumerate(
+              zip(input_records, control_records)
+          ):
+              if len(input_sequence) != 1000 or len(control_sequence) != 1000:
+                  raise RuntimeError(f'Unexpected sequence length at record {idx}')
+              if not set(input_sequence).issubset({'A', 'C', 'G', 'T'}):
+                  raise RuntimeError(f'Invalid input alphabet at record {idx}')
+              if not set(control_sequence).issubset({'A', 'C', 'G', 'T'}):
+                  raise RuntimeError(f'Invalid control alphabet at record {idx}')
+          PY
+
+          sha256sum "$INPUT_FILE" "$CONTROL_FILE" \
+            > benchmark/result/input_and_control_checksums.sha256
+
+      - name: Configure swap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo '=== before swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } > benchmark/result/swap_setup.txt
+
+          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((40 * 1024 * 1024 * 1024))
+          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
+
+          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
+            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
+          fi
+
+          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-homer
+            sudo chmod 600 /swapfile-homer
+            sudo mkswap /swapfile-homer
+            sudo swapon -p 10 /swapfile-homer
+            sudo sysctl -w vm.swappiness=100 || true
+            sudo sysctl -w vm.page-cluster=0 || true
+          fi
+
+          {
+            echo
+            echo '=== after swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
+      - name: Measure HOMER on one CPU core
+        shell: bash
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          VECLIB_MAXIMUM_THREADS: 1
+          NUMEXPR_NUM_THREADS: 1
+          MALLOC_ARENA_MAX: 2
+        run: |
+          set -u
+
+          export PATH="$PWD/benchmark/homer/bin:$PATH"
+
+          INPUT_FILE='benchmark/package/DATASET_DNA_1.fa'
+          CONTROL_FILE='benchmark/control/DATASET_DNA_1_control.fa'
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          CPU_MHZ="$(lscpu | awk -F: '/CPU max MHz/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          HOMER_VERSION="$(grep -E '^HOMER' benchmark/homer/config.txt 2>/dev/null | head -n 1 || true)"
+
+          printf 'motif_length\tstatus\telapsed_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tmotif_num\tcpu_model\thomer_version\n' \
+            > benchmark/result/homer_dna1.tsv
+
+          {
+            echo "CPU model       : $CPU_MODEL"
+            echo "CPU max MHz     : $CPU_MHZ"
+            echo "CPU allowed     : $CPU_ALLOWED"
+            echo "Pinned CPU      : $CPU_ID"
+            echo "HOMER version   : $HOMER_VERSION"
+            echo "Input           : DATASET_DNA_1.fa"
+            echo "Input SHA-256   : $(sha256sum "$INPUT_FILE" | awk '{print $1}')"
+            echo "Control SHA-256 : $(sha256sum "$CONTROL_FILE" | awk '{print $1}')"
+            echo "Control         : one 3-mer-preserving shuffled sequence per input sequence, seed 0"
+            echo "Parameters      : -basic -len W -S 1 -noknown -noweight -norevopp -p 1"
+            echo "Time limit      : 5400 seconds per motif length"
+          } > benchmark/result/environment.txt
+
+          for MOTIF_LENGTH in 4 8 16; do
+            OUTPUT_DIR="benchmark/output_W${MOTIF_LENGTH}"
+            TIME_FILE="benchmark/result/time_W${MOTIF_LENGTH}.tsv"
+            LOG_FILE="benchmark/result/run_W${MOTIF_LENGTH}.log"
+            PARAM_FILE="benchmark/result/parameters_W${MOTIF_LENGTH}.txt"
+
+            rm -rf "$OUTPUT_DIR"
+            sync
+            sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+            set +e
+            /usr/bin/time \
+              -f '%e\t%U\t%S\t%M\t%x' \
+              -o "$TIME_FILE" \
+              timeout --signal=TERM --kill-after=60s 5400s \
+              taskset -c "$CPU_ID" \
+              findMotifs.pl \
+                "$INPUT_FILE" \
+                fasta \
+                "$OUTPUT_DIR" \
+                -fastaBg "$CONTROL_FILE" \
+                -basic \
+                -len "$MOTIF_LENGTH" \
+                -S 1 \
+                -noknown \
+                -noweight \
+                -norevopp \
+                -p 1 \
+              > "$LOG_FILE" 2>&1
+            COMMAND_RC=$?
+            set -e
+
+            ELAPSED='NA'
+            USER_TIME='NA'
+            SYSTEM_TIME='NA'
+            MAX_RSS='NA'
+            if [ -s "$TIME_FILE" ]; then
+              IFS=$'\t' read -r ELAPSED USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+            fi
+
+            STATUS='COMPLETED'
+            if [ "$COMMAND_RC" -eq 124 ] || [ "$COMMAND_RC" -eq 137 ]; then
+              STATUS='TIMEOUT_5400S'
+            elif [ "$COMMAND_RC" -ne 0 ]; then
+              STATUS="FAILED_RC_${COMMAND_RC}"
+            fi
+
+            MOTIF_NUM=0
+            if [ -d "$OUTPUT_DIR" ]; then
+              MOTIF_NUM="$(find "$OUTPUT_DIR" -maxdepth 2 -type f -name '*.motif' -print0 2>/dev/null \
+                | xargs -0 -r grep -h '^>' 2>/dev/null \
+                | wc -l \
+                | tr -d ' ')"
+
+              if [ -s "$OUTPUT_DIR/motifFindingParameters.txt" ]; then
+                cp "$OUTPUT_DIR/motifFindingParameters.txt" "$PARAM_FILE"
+              fi
+            fi
+
+            if [ "$STATUS" = 'COMPLETED' ] && [ "$MOTIF_NUM" -lt 1 ]; then
+              STATUS='FAILED_NO_MOTIF'
+            fi
+
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$MOTIF_LENGTH" \
+              "$STATUS" \
+              "$ELAPSED" \
+              "$USER_TIME" \
+              "$SYSTEM_TIME" \
+              "$MAX_RSS" \
+              "$COMMAND_RC" \
+              "$MOTIF_NUM" \
+              "$CPU_MODEL" \
+              "$HOMER_VERSION" \
+              >> benchmark/result/homer_dna1.tsv
+
+            rm -rf "$OUTPUT_DIR"
+          done
+
+          {
+            echo
+            echo '=== after measurements ==='
+            free -h
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
+          cat benchmark/result/homer_dna1.tsv
+
+      - name: Upload HOMER measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homer-dna1-results
+          path: benchmark/result
+          retention-days: 1
+          compression-level: 6
