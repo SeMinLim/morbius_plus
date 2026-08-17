@@ -1,4 +1,4 @@
-name: Temporary STREME DNA3 Short Backup
+name: Temporary STREME DNA3 Short With Swap
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 105
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +41,45 @@ jobs:
           repository: SeMinLim/morbius_plus
           run-id: 31936768291
 
+      - name: Configure swap
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p benchmark/result
+          {
+            echo '=== before swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } > benchmark/result/swap_setup.txt
+
+          FREE_BYTES="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
+          RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+          MAX_SWAP_BYTES=$((48 * 1024 * 1024 * 1024))
+          FILE_SWAP_BYTES=$((FREE_BYTES - RESERVE_BYTES))
+
+          if [ "$FILE_SWAP_BYTES" -gt "$MAX_SWAP_BYTES" ]; then
+            FILE_SWAP_BYTES="$MAX_SWAP_BYTES"
+          fi
+
+          if [ "$FILE_SWAP_BYTES" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+            sudo fallocate -l "$FILE_SWAP_BYTES" /swapfile-streme
+            sudo chmod 600 /swapfile-streme
+            sudo mkswap /swapfile-streme
+            sudo swapon -p 10 /swapfile-streme
+            sudo sysctl -w vm.swappiness=100 || true
+            sudo sysctl -w vm.page-cluster=0 || true
+          fi
+
+          {
+            echo
+            echo '=== after swap ==='
+            free -h
+            df -h /
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
       - name: Measure one motif length on one CPU core
         shell: micromamba-shell {0}
         env:
@@ -49,6 +88,7 @@ jobs:
           MKL_NUM_THREADS: 1
           VECLIB_MAXIMUM_THREADS: 1
           NUMEXPR_NUM_THREADS: 1
+          MALLOC_ARENA_MAX: 2
         run: |
           set -u
 
@@ -76,6 +116,7 @@ jobs:
             echo "Motif length    : $MOTIF_LENGTH"
             echo "Parameters      : --dna --w $MOTIF_LENGTH --nmotifs 1 --order 2 --seed 0"
             echo "Strand mode     : standard DNA search including reverse complements"
+            echo "Time limit      : 5400 seconds"
           } > benchmark/result/environment.txt
 
           sync
@@ -85,6 +126,7 @@ jobs:
           /usr/bin/time \
             -f '%e\t%U\t%S\t%M\t%x' \
             -o "$TIME_FILE" \
+            timeout --signal=TERM --kill-after=60s 5400s \
             taskset -c "$CPU_ID" \
             "$STREME_BIN" \
               --p "$INPUT_FILE" \
@@ -107,7 +149,9 @@ jobs:
           fi
 
           STATUS='COMPLETED'
-          if [ "$COMMAND_RC" -ne 0 ]; then
+          if [ "$COMMAND_RC" -eq 124 ] || [ "$COMMAND_RC" -eq 137 ]; then
+            STATUS='TIMEOUT_5400S'
+          elif [ "$COMMAND_RC" -ne 0 ]; then
             STATUS="FAILED_RC_${COMMAND_RC}"
           elif [ ! -s "$OUTPUT_DIR/streme.txt" ]; then
             STATUS='FAILED_NO_RESULT'
@@ -127,14 +171,20 @@ jobs:
             "$STREME_VERSION" \
             >> benchmark/result/result.tsv
 
+          {
+            echo
+            echo '=== after measurement ==='
+            free -h
+            swapon --show || true
+          } >> benchmark/result/swap_setup.txt
+
           cat benchmark/result/result.tsv
-          exit "$COMMAND_RC"
 
       - name: Upload measurement
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: streme-dna3-seed0-backup-W${{ matrix.motif_length }}
+          name: streme-dna3-seed0-swap-W${{ matrix.motif_length }}
           path: benchmark/result
           retention-days: 1
           compression-level: 6
@@ -148,7 +198,7 @@ jobs:
       - name: Download measurements
         uses: actions/download-artifact@v4
         with:
-          pattern: streme-dna3-seed0-backup-W*
+          pattern: streme-dna3-seed0-swap-W*
           path: collected
           merge-multiple: false
 
