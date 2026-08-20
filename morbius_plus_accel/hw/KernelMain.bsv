@@ -145,21 +145,23 @@ module mkKernelMain(KernelMainIfc);
 		Bit#(512) word = readWordQs[0].first;
 		readWordQs[0].deq;
 		if ( word[31:0] != commandMagic || word[47:32] != protocolVersion ) begin
-			$display("Morbius+ protocol error: magic=%h version=%0d", word[31:0], word[47:32]);
-			$finish(1);
+			startedR <= False;
+			stateR <= KERNEL_IDLE;
+			doneQ.enq(True);
+		end else begin
+			commandR <= word[55:48];
+			alphabetSizeR <= truncate(word[63:56]);
+			sequenceLengthR <= truncate(word[79:64]);
+			motifLengthR <= word[87:80];
+			pipelineNumR <= word[95:88];
+			scoreThresholdR <= unpack(word[159:128]);
+			maxUpdatesR <= unpack(word[191:160]);
+			batchSizeR <= unpack(word[223:192]);
+			sequenceBeatNumR <= truncate(word[255:224]);
+			readCursorR <= 64;
+			sequenceBeatIdxR <= 0;
+			stateR <= KERNEL_REQ_SEQUENCE;
 		end
-		commandR <= word[55:48];
-		alphabetSizeR <= truncate(word[63:56]);
-		sequenceLengthR <= truncate(word[79:64]);
-		motifLengthR <= word[87:80];
-		pipelineNumR <= word[95:88];
-		scoreThresholdR <= unpack(word[159:128]);
-		maxUpdatesR <= unpack(word[191:160]);
-		batchSizeR <= unpack(word[223:192]);
-		sequenceBeatNumR <= truncate(word[255:224]);
-		readCursorR <= 64;
-		sequenceBeatIdxR <= 0;
-		stateR <= KERNEL_REQ_SEQUENCE;
 	endrule
 
 	rule requestSequenceBeat ( startedR && stateR == KERNEL_REQ_SEQUENCE );
