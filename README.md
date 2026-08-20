@@ -10,8 +10,7 @@ morbius_plus/
 ├── morbius_plus_accel/
 │   ├── hw/                       Bluespec kernel and blueVitis/U50 build flow
 │   └── sw/                       host orchestrator, XRT backend, and kernel model
-├── synthethic_dataset_generator/ synthetic DNA and protein dataset generator
-└── temporary_results/            benchmark results
+└── synthethic_dataset_generator/ synthetic DNA and protein dataset generator
 ```
 
 ## Software version
