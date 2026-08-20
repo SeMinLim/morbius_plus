@@ -1,0 +1,33 @@
+name: Temporary Cleanup Assistant Branch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-cleanup-assistant-branch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Remove implementation branch and workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin --delete assistant/morbius-plus-implementation
+          rm -f .github/workflows/temporary-cleanup-assistant-branch.yml
+          git config user.name 'OpenAI Assistant'
+          git config user.email 'assistant@openai.com'
+          git add -A
+          git commit -m 'Remove temporary implementation branch workflow'
+          git push origin main
