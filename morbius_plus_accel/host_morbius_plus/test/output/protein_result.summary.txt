@@ -1,0 +1,22 @@
+Input File              : /home/runner/work/morbius_plus/morbius_plus/morbius_plus/morbius_plus_accel/host_morbius_plus/test/PROTEIN_TEST.fasta
+Alphabet                : Protein
+Sequence Number          : 32
+Sequence Length          : 60
+Motif Length             : 6
+SampleNum                : 32
+Seed Valid               : Yes
+Selected Seed            : DPA
+Seed Support             : 32
+Expected Seed Support    : 6.24765
+Seed Rank                : 11.4848
+Anchor Offset            : 3
+Anchor Rank              : 0.95
+Pipeline Number          : 4
+Selected Pipeline        : 3
+Best Score               : 164
+Normalized Best Score    : 0.822917
+Score Threshold          : 0.8
+Pipeline Update Number   : 21
+Threshold Reached        : Yes
+Consensus Subsequence    : MKLDPA
+Elapsed Time             : 0.000350952 seconds
