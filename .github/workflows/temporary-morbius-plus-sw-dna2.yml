@@ -1,0 +1,197 @@
+name: Temporary Morbius Plus SW DNA2 Benchmark
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-morbius-plus-sw-dna2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Record execution environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark/result
+
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+
+          {
+            echo "CPU model       : $CPU_MODEL"
+            echo "CPU allowed     : $CPU_ALLOWED"
+            echo "Pinned CPU      : $CPU_ID"
+            echo "Runner image    : ubuntu-24.04"
+            echo "Source commit   : $GITHUB_SHA"
+            echo "Compiler        : $(g++ --version | head -n 1)"
+            echo "Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1"
+          } | tee benchmark/result/environment.txt
+
+      - name: Download DATASET_DNA_2 from Google Drive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet 'gdown==5.2.0'
+          mkdir -p benchmark/data
+          gdown --id '17lZYPtw9R6sShVPYLZcwvx7n37zAbMAT' \
+            --output benchmark/data/DATASET_DNA_2.fa
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('benchmark/data/DATASET_DNA_2.fa')
+          record_num = 0
+          sequence_lengths = set()
+          current_length = 0
+
+          with path.open() as input_file:
+              for raw_line in input_file:
+                  line = raw_line.strip()
+                  if not line:
+                      continue
+                  if line.startswith('>'):
+                      if record_num > 0:
+                          sequence_lengths.add(current_length)
+                      record_num += 1
+                      current_length = 0
+                  else:
+                      if not set(line.upper()).issubset({'A', 'C', 'G', 'T'}):
+                          raise RuntimeError('Invalid DNA alphabet')
+                      current_length += len(line)
+
+          if record_num > 0:
+              sequence_lengths.add(current_length)
+
+          if record_num != 65536:
+              raise RuntimeError(f'Expected 65536 records, found {record_num}')
+          if sequence_lengths != {1000}:
+              raise RuntimeError(f'Unexpected sequence lengths: {sequence_lengths}')
+          PY
+
+          sha256sum benchmark/data/DATASET_DNA_2.fa \
+            | tee benchmark/result/input_checksum.sha256
+          stat -c 'Input bytes     : %s' benchmark/data/DATASET_DNA_2.fa \
+            | tee -a benchmark/result/environment.txt
+
+      - name: Require AMD EPYC 9V74
+        shell: bash
+        run: |
+          set -euo pipefail
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          if [[ "$CPU_MODEL" != *"AMD EPYC 9V74"* ]]; then
+            echo "Required CPU is AMD EPYC 9V74, but runner supplied: $CPU_MODEL"
+            exit 78
+          fi
+
+      - name: Build Morbius Plus software
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C morbius_plus_vanila clean
+          make -C morbius_plus_vanila
+
+      - name: Measure all motif lengths on one CPU core
+        shell: bash
+        env:
+          OMP_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          VECLIB_MAXIMUM_THREADS: 1
+          NUMEXPR_NUM_THREADS: 1
+          MALLOC_ARENA_MAX: 2
+        run: |
+          set -euo pipefail
+
+          INPUT_FILE="$PWD/benchmark/data/DATASET_DNA_2.fa"
+          EXECUTABLE="$PWD/morbius_plus_vanila/morbius_plus_vanila"
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+
+          printf 'motif_length\tstatus\twall_seconds\tinternal_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\n' \
+            > benchmark/result/morbius_plus_sw_dna2.tsv
+
+          for MOTIF_LENGTH in 4 8 16 32 64 128; do
+            OUTPUT_PREFIX="$PWD/benchmark/output/W${MOTIF_LENGTH}/result"
+            LOG_FILE="$PWD/benchmark/result/run_W${MOTIF_LENGTH}.log"
+            TIME_FILE="$PWD/benchmark/result/time_W${MOTIF_LENGTH}.tsv"
+
+            rm -rf "$PWD/benchmark/output/W${MOTIF_LENGTH}"
+            mkdir -p "$PWD/benchmark/output/W${MOTIF_LENGTH}"
+            sync
+            sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+            set +e
+            /usr/bin/time \
+              -f '%e\t%U\t%S\t%M\t%x' \
+              -o "$TIME_FILE" \
+              taskset -c "$CPU_ID" \
+              "$EXECUTABLE" \
+                --input "$INPUT_FILE" \
+                --output "$OUTPUT_PREFIX" \
+                --alphabet dna \
+                --motif-length "$MOTIF_LENGTH" \
+                --pipelines 16 \
+                --score-threshold 0.90 \
+                --seed 1 \
+                --threads 1 \
+              > "$LOG_FILE" 2>&1
+            COMMAND_RC=$?
+            set -e
+
+            IFS=$'\t' read -r WALL_TIME USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+            INTERNAL_TIME="$(awk -F: '/Elapsed Time[[:space:]]*:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$LOG_FILE")"
+            STATUS='COMPLETED'
+            if [ "$COMMAND_RC" -ne 0 ]; then
+              STATUS="FAILED_RC_${COMMAND_RC}"
+            elif [ -z "$INTERNAL_TIME" ]; then
+              STATUS='FAILED_NO_INTERNAL_TIME'
+            elif [ ! -s "${OUTPUT_PREFIX}.summary.txt" ]; then
+              STATUS='FAILED_NO_RESULT'
+            fi
+
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$MOTIF_LENGTH" \
+              "$STATUS" \
+              "$WALL_TIME" \
+              "$INTERNAL_TIME" \
+              "$USER_TIME" \
+              "$SYSTEM_TIME" \
+              "$MAX_RSS" \
+              "$COMMAND_RC" \
+              "$CPU_MODEL" \
+              >> benchmark/result/morbius_plus_sw_dna2.tsv
+
+            grep -E 'Seed Initialization Time|Elapsed Time|Best Pipeline|Best Normalized Score|Threshold Reached' \
+              "$LOG_FILE" \
+              > "$PWD/benchmark/result/summary_W${MOTIF_LENGTH}.txt" || true
+
+            if [ "$STATUS" != 'COMPLETED' ]; then
+              cat "$LOG_FILE"
+              exit 1
+            fi
+          done
+
+          cat benchmark/result/morbius_plus_sw_dna2.tsv
+
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: morbius-plus-sw-dna2-results
+          path: benchmark/result
+          retention-days: 7
+          compression-level: 6
