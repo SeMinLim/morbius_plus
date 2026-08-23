@@ -1,0 +1,71 @@
+name: Temporary Validate Synchronized Morbius Plus Layout
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/temporary-validate-synchronized-layout.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out Morbius+
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: morbius_plus
+          fetch-depth: 0
+
+      - name: Check out blueVitis
+        uses: actions/checkout@v4
+        with:
+          repository: SeMinLim/bluevitis
+          ref: main
+          path: bluevitis
+
+      - name: Install Bluespec compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/bsc.tar.gz \
+            https://github.com/B-Lang-org/bsc/releases/download/2026.01/bsc-2026.01-debian-12.13.tar.gz
+          echo '9da36623e301ae14ba5e670cb98d11c99277faa915025ccb7615de3ec14002c3  /tmp/bsc.tar.gz' | sha256sum -c -
+          mkdir -p /tmp/bsc
+          tar xzf /tmp/bsc.tar.gz -C /tmp/bsc --strip-components=1
+          echo '/tmp/bsc/bin' >> "$GITHUB_PATH"
+          echo 'BLUESPECDIR=/tmp/bsc/lib' >> "$GITHUB_ENV"
+
+      - name: Validate Morbius+ repository layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C morbius_plus/morbius_plus_accel test
+
+      - name: Validate blueVitis layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C bluevitis/hw/kernel_morbius_plus sim
+          make -C bluevitis/sw/host_morbius_plus test
+
+      - name: Remove temporary workflow
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd morbius_plus
+          rm -f .github/workflows/temporary-validate-synchronized-layout.yml
+          git config user.name 'OpenAI Assistant'
+          git config user.email 'assistant@openai.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'Remove temporary synchronized-layout validation workflow'
+            git push origin main
+          fi
