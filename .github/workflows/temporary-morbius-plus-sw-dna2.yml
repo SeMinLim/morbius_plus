@@ -9,7 +9,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: temporary-morbius-plus-sw-dna2
+  cancel-in-progress: true
 
 jobs:
   benchmark:
@@ -20,17 +24,19 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Record execution environment
+      - name: Record and publish execution environment
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p benchmark/result
+          mkdir -p benchmark/result temporary_results
 
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
           CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
           CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
 
           {
+            echo "Run ID          : $GITHUB_RUN_ID"
+            echo "Run attempt     : $GITHUB_RUN_ATTEMPT"
             echo "CPU model       : $CPU_MODEL"
             echo "CPU allowed     : $CPU_ALLOWED"
             echo "Pinned CPU      : $CPU_ID"
@@ -38,7 +44,17 @@ jobs:
             echo "Source commit   : $GITHUB_SHA"
             echo "Compiler        : $(g++ --version | head -n 1)"
             echo "Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1"
+            echo "State           : CPU_ASSIGNED"
           } | tee benchmark/result/environment.txt
+
+          cp benchmark/result/environment.txt \
+            temporary_results/morbius_plus_sw_dna2_status.txt
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add temporary_results/morbius_plus_sw_dna2_status.txt
+          git commit -m 'Record temporary Morbius+ DNA2 benchmark runner' || true
+          git push
 
       - name: Download DATASET_DNA_2 from Google Drive
         shell: bash
@@ -186,6 +202,26 @@ jobs:
           done
 
           cat benchmark/result/morbius_plus_sw_dna2.tsv
+
+      - name: Publish completed measurements
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESTINATION='temporary_results/morbius_plus_sw_dna2_benchmark'
+          rm -rf "$DESTINATION"
+          mkdir -p "$DESTINATION"
+
+          cp benchmark/result/morbius_plus_sw_dna2.tsv "$DESTINATION/"
+          cp benchmark/result/environment.txt "$DESTINATION/"
+          cp benchmark/result/input_checksum.sha256 "$DESTINATION/"
+          cp benchmark/result/summary_W*.txt "$DESTINATION/"
+
+          printf '\nState           : COMPLETED\n' \
+            >> temporary_results/morbius_plus_sw_dna2_status.txt
+
+          git add temporary_results/morbius_plus_sw_dna2_status.txt "$DESTINATION"
+          git commit -m 'Store temporary Morbius+ DNA2 measurements'
+          git push
 
       - name: Upload measurements
         if: always()
