@@ -16,47 +16,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  benchmark:
+  prepare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 210
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Record and publish execution environment
+      - name: Publish benchmark run status
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p benchmark/result temporary_results
-
-          CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
-          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
-          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+          mkdir -p temporary_results
 
           {
             echo "Run ID          : $GITHUB_RUN_ID"
             echo "Run attempt     : $GITHUB_RUN_ATTEMPT"
-            echo "CPU model       : $CPU_MODEL"
-            echo "CPU allowed     : $CPU_ALLOWED"
-            echo "Pinned CPU      : $CPU_ID"
             echo "Runner image    : ubuntu-24.04"
             echo "Source commit   : $GITHUB_SHA"
-            echo "Compiler        : $(g++ --version | head -n 1)"
             echo "Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1"
-            echo "State           : CPU_ASSIGNED"
-          } | tee benchmark/result/environment.txt
-
-          cp benchmark/result/environment.txt \
-            temporary_results/morbius_plus_sw_dna2_status.txt
+            echo "State           : PREPARING"
+          } > temporary_results/morbius_plus_sw_dna2_status.txt
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add temporary_results/morbius_plus_sw_dna2_status.txt
-          git commit -m 'Record temporary Morbius+ DNA2 benchmark runner' || true
+          git commit -m 'Record temporary Morbius+ DNA2 benchmark run' || true
           git push
 
-      - name: Download DATASET_DNA_2 from Google Drive
+      - name: Download and validate DATASET_DNA_2
         shell: bash
         run: |
           set -euo pipefail
@@ -98,15 +86,60 @@ jobs:
           PY
 
           sha256sum benchmark/data/DATASET_DNA_2.fa \
-            | tee benchmark/result/input_checksum.sha256
-          stat -c 'Input bytes     : %s' benchmark/data/DATASET_DNA_2.fa \
-            | tee -a benchmark/result/environment.txt
+            > benchmark/data/input_checksum.sha256
+          stat -c '%s' benchmark/data/DATASET_DNA_2.fa \
+            > benchmark/data/input_size_bytes.txt
+
+      - name: Upload validated dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: morbius-plus-sw-dna2-input
+          path: benchmark/data
+          retention-days: 1
+          compression-level: 6
+
+  benchmark:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        motif_length: [4, 8, 16, 32, 64, 128]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download validated dataset
+        uses: actions/download-artifact@v4
+        with:
+          name: morbius-plus-sw-dna2-input
+          path: benchmark/data
 
       - name: Require AMD EPYC 9V74
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p benchmark/result
+
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+          CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
+          CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
+
+          {
+            echo "Run ID          : $GITHUB_RUN_ID"
+            echo "Run attempt     : $GITHUB_RUN_ATTEMPT"
+            echo "Motif length    : ${{ matrix.motif_length }}"
+            echo "CPU model       : $CPU_MODEL"
+            echo "CPU allowed     : $CPU_ALLOWED"
+            echo "Pinned CPU      : $CPU_ID"
+            echo "Runner image    : ubuntu-24.04"
+            echo "Source commit   : $GITHUB_SHA"
+            echo "Compiler        : $(g++ --version | head -n 1)"
+            echo "Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1"
+          } > benchmark/result/environment.txt
+
           if [[ "$CPU_MODEL" != *"AMD EPYC 9V74"* ]]; then
             echo "Required CPU is AMD EPYC 9V74, but runner supplied: $CPU_MODEL"
             exit 78
@@ -119,7 +152,7 @@ jobs:
           make -C morbius_plus_vanila clean
           make -C morbius_plus_vanila
 
-      - name: Measure all motif lengths on one CPU core
+      - name: Measure one motif length on one CPU core
         shell: bash
         env:
           OMP_NUM_THREADS: 1
@@ -131,103 +164,185 @@ jobs:
         run: |
           set -euo pipefail
 
+          MOTIF_LENGTH='${{ matrix.motif_length }}'
           INPUT_FILE="$PWD/benchmark/data/DATASET_DNA_2.fa"
           EXECUTABLE="$PWD/morbius_plus_vanila/morbius_plus_vanila"
+          OUTPUT_PREFIX="$PWD/benchmark/output/W${MOTIF_LENGTH}/result"
+          LOG_FILE="$PWD/benchmark/result/run.log"
+          TIME_FILE="$PWD/benchmark/result/time.tsv"
           CPU_ALLOWED="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/self/status)"
           CPU_ID="$(printf '%s' "$CPU_ALLOWED" | cut -d',' -f1 | cut -d'-' -f1)"
           CPU_MODEL="$(lscpu | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
 
+          mkdir -p "$PWD/benchmark/output/W${MOTIF_LENGTH}"
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+
+          set +e
+          /usr/bin/time \
+            -f '%e\t%U\t%S\t%M\t%x' \
+            -o "$TIME_FILE" \
+            taskset -c "$CPU_ID" \
+            "$EXECUTABLE" \
+              --input "$INPUT_FILE" \
+              --output "$OUTPUT_PREFIX" \
+              --alphabet dna \
+              --motif-length "$MOTIF_LENGTH" \
+              --pipelines 16 \
+              --score-threshold 0.90 \
+              --seed 1 \
+              --threads 1 \
+            > "$LOG_FILE" 2>&1
+          COMMAND_RC=$?
+          set -e
+
+          IFS=$'\t' read -r WALL_TIME USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
+          INTERNAL_TIME="$(awk -F: '/Elapsed Time[[:space:]]*:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$LOG_FILE")"
+          STATUS='COMPLETED'
+          if [ "$COMMAND_RC" -ne 0 ]; then
+            STATUS="FAILED_RC_${COMMAND_RC}"
+          elif [ -z "$INTERNAL_TIME" ]; then
+            STATUS='FAILED_NO_INTERNAL_TIME'
+          elif [ ! -s "${OUTPUT_PREFIX}.summary.txt" ]; then
+            STATUS='FAILED_NO_RESULT'
+          fi
+
           printf 'motif_length\tstatus\twall_seconds\tinternal_seconds\tuser_seconds\tsystem_seconds\tmax_rss_kb\texit_code\tcpu_model\n' \
-            > benchmark/result/morbius_plus_sw_dna2.tsv
+            > benchmark/result/result.tsv
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$MOTIF_LENGTH" \
+            "$STATUS" \
+            "$WALL_TIME" \
+            "$INTERNAL_TIME" \
+            "$USER_TIME" \
+            "$SYSTEM_TIME" \
+            "$MAX_RSS" \
+            "$COMMAND_RC" \
+            "$CPU_MODEL" \
+            >> benchmark/result/result.tsv
 
-          for MOTIF_LENGTH in 4 8 16 32 64 128; do
-            OUTPUT_PREFIX="$PWD/benchmark/output/W${MOTIF_LENGTH}/result"
-            LOG_FILE="$PWD/benchmark/result/run_W${MOTIF_LENGTH}.log"
-            TIME_FILE="$PWD/benchmark/result/time_W${MOTIF_LENGTH}.tsv"
+          grep -E 'Seed Initialization Time|Elapsed Time|Best Pipeline|Best Normalized Score|Threshold Reached' \
+            "$LOG_FILE" \
+            > benchmark/result/summary.txt || true
+          cp benchmark/data/input_checksum.sha256 benchmark/result/
+          cp benchmark/data/input_size_bytes.txt benchmark/result/
 
-            rm -rf "$PWD/benchmark/output/W${MOTIF_LENGTH}"
-            mkdir -p "$PWD/benchmark/output/W${MOTIF_LENGTH}"
-            sync
-            sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+          cat benchmark/result/result.tsv
+          if [ "$STATUS" != 'COMPLETED' ]; then
+            cat "$LOG_FILE"
+            exit 1
+          fi
 
-            set +e
-            /usr/bin/time \
-              -f '%e\t%U\t%S\t%M\t%x' \
-              -o "$TIME_FILE" \
-              taskset -c "$CPU_ID" \
-              "$EXECUTABLE" \
-                --input "$INPUT_FILE" \
-                --output "$OUTPUT_PREFIX" \
-                --alphabet dna \
-                --motif-length "$MOTIF_LENGTH" \
-                --pipelines 16 \
-                --score-threshold 0.90 \
-                --seed 1 \
-                --threads 1 \
-              > "$LOG_FILE" 2>&1
-            COMMAND_RC=$?
-            set -e
+      - name: Upload one measurement
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: morbius-plus-sw-dna2-W${{ matrix.motif_length }}
+          path: benchmark/result
+          retention-days: 7
+          compression-level: 6
 
-            IFS=$'\t' read -r WALL_TIME USER_TIME SYSTEM_TIME MAX_RSS TIME_EXIT < "$TIME_FILE"
-            INTERNAL_TIME="$(awk -F: '/Elapsed Time[[:space:]]*:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' "$LOG_FILE")"
-            STATUS='COMPLETED'
-            if [ "$COMMAND_RC" -ne 0 ]; then
-              STATUS="FAILED_RC_${COMMAND_RC}"
-            elif [ -z "$INTERNAL_TIME" ]; then
-              STATUS='FAILED_NO_INTERNAL_TIME'
-            elif [ ! -s "${OUTPUT_PREFIX}.summary.txt" ]; then
-              STATUS='FAILED_NO_RESULT'
-            fi
+  collect:
+    needs: [prepare, benchmark]
+    if: always()
+    runs-on: ubuntu-24.04
 
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "$MOTIF_LENGTH" \
-              "$STATUS" \
-              "$WALL_TIME" \
-              "$INTERNAL_TIME" \
-              "$USER_TIME" \
-              "$SYSTEM_TIME" \
-              "$MAX_RSS" \
-              "$COMMAND_RC" \
-              "$CPU_MODEL" \
-              >> benchmark/result/morbius_plus_sw_dna2.tsv
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-            grep -E 'Seed Initialization Time|Elapsed Time|Best Pipeline|Best Normalized Score|Threshold Reached' \
-              "$LOG_FILE" \
-              > "$PWD/benchmark/result/summary_W${MOTIF_LENGTH}.txt" || true
+      - name: Download measurement artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: morbius-plus-sw-dna2-W*
+          path: collected
+          merge-multiple: false
 
-            if [ "$STATUS" != 'COMPLETED' ]; then
-              cat "$LOG_FILE"
-              exit 1
-            fi
-          done
+      - name: Aggregate and validate measurements
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p final
 
-          cat benchmark/result/morbius_plus_sw_dna2.tsv
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+
+          rows = []
+          for path in Path('collected').rglob('result.tsv'):
+              with path.open(newline='') as input_file:
+                  rows.extend(csv.DictReader(input_file, delimiter='\t'))
+
+          rows.sort(key=lambda row: int(row['motif_length']))
+          expected_lengths = [4, 8, 16, 32, 64, 128]
+          actual_lengths = [int(row['motif_length']) for row in rows]
+          if actual_lengths != expected_lengths:
+              raise RuntimeError(
+                  f'Expected motif lengths {expected_lengths}, found {actual_lengths}'
+              )
+          for row in rows:
+              if row['status'] != 'COMPLETED':
+                  raise RuntimeError(f"Incomplete measurement: {row}")
+              if 'AMD EPYC 9V74' not in row['cpu_model']:
+                  raise RuntimeError(f"Wrong CPU model: {row['cpu_model']}")
+
+          fields = [
+              'motif_length',
+              'status',
+              'wall_seconds',
+              'internal_seconds',
+              'user_seconds',
+              'system_seconds',
+              'max_rss_kb',
+              'exit_code',
+              'cpu_model',
+          ]
+          with Path('final/morbius_plus_sw_dna2.tsv').open('w', newline='') as output_file:
+              writer = csv.DictWriter(
+                  output_file,
+                  fieldnames=fields,
+                  delimiter='\t',
+                  lineterminator='\n',
+              )
+              writer.writeheader()
+              writer.writerows(rows)
+          PY
+
+          cp -a collected final/individual_measurements
+          cat final/morbius_plus_sw_dna2.tsv
 
       - name: Publish completed measurements
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+
           DESTINATION='temporary_results/morbius_plus_sw_dna2_benchmark'
           rm -rf "$DESTINATION"
           mkdir -p "$DESTINATION"
+          cp final/morbius_plus_sw_dna2.tsv "$DESTINATION/"
+          cp -a final/individual_measurements "$DESTINATION/"
 
-          cp benchmark/result/morbius_plus_sw_dna2.tsv "$DESTINATION/"
-          cp benchmark/result/environment.txt "$DESTINATION/"
-          cp benchmark/result/input_checksum.sha256 "$DESTINATION/"
-          cp benchmark/result/summary_W*.txt "$DESTINATION/"
-
-          printf '\nState           : COMPLETED\n' \
-            >> temporary_results/morbius_plus_sw_dna2_status.txt
+          {
+            echo "Run ID          : $GITHUB_RUN_ID"
+            echo "Run attempt     : $GITHUB_RUN_ATTEMPT"
+            echo "Runner image    : ubuntu-24.04"
+            echo "Source commit   : $GITHUB_SHA"
+            echo "Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1"
+            echo "State           : COMPLETED"
+          } > temporary_results/morbius_plus_sw_dna2_status.txt
 
           git add temporary_results/morbius_plus_sw_dna2_status.txt "$DESTINATION"
           git commit -m 'Store temporary Morbius+ DNA2 measurements'
           git push
 
-      - name: Upload measurements
+      - name: Upload complete measurements
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: morbius-plus-sw-dna2-results
-          path: benchmark/result
+          path: final
           retention-days: 7
           compression-level: 6
