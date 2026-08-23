@@ -8,8 +8,8 @@
 morbius_plus/
 ├── morbius_plus_vanila/          pure C++ reference implementation
 ├── morbius_plus_accel/
-│   ├── hw/                       Bluespec kernel and blueVitis/U50 build flow
-│   └── sw/                       host orchestrator, XRT backend, and kernel model
+│   ├── kernel_morbius_plus/      Bluespec kernel and blueVitis/U50 build flow
+│   └── host_morbius_plus/        host orchestrator, XRT backend, and kernel model
 └── synthethic_dataset_generator/ synthetic DNA and protein dataset generator
 ```
 
@@ -42,7 +42,7 @@ make test
 ```
 
 ```bash
-cd hw
+cd kernel_morbius_plus
 make all TARGET=hw_emu
 make run TARGET=hw_emu MORBIUS_ARGS="--input <dataset.fasta> --output <result_prefix> --alphabet dna --motif-length 16 --pipelines 4 --score-threshold 0.90 --seed 1"
 ```

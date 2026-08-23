@@ -1,18 +1,18 @@
 .PHONY: sim model test host clean
 
 sim:
-	$(MAKE) -C hw sim
+	$(MAKE) -C kernel_morbius_plus sim
 
 model:
-	$(MAKE) -C sw model
+	$(MAKE) -C host_morbius_plus model
 
 test:
-	$(MAKE) -C hw sim
-	$(MAKE) -C sw test
+	$(MAKE) -C kernel_morbius_plus sim
+	$(MAKE) -C host_morbius_plus test
 
 host:
-	$(MAKE) -C sw
+	$(MAKE) -C host_morbius_plus
 
 clean:
-	$(MAKE) -C hw clean
-	$(MAKE) -C sw clean
+	$(MAKE) -C kernel_morbius_plus clean
+	$(MAKE) -C host_morbius_plus clean
