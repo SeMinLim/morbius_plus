@@ -8,5 +8,3 @@ Source commit   : 0a7e862b50cc5057fa60aaddc49eca923832d553
 Compiler        : g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
 Configuration   : motif length 128, 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1
 State           : CPU_ASSIGNED
-
-State           : COMPLETED
