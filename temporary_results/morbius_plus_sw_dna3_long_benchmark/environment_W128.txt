@@ -1,0 +1,8 @@
+Run ID          : 32687322183
+Run attempt     : 1
+CPU model       : AMD EPYC 9V74 80-Core Processor
+CPU allowed     : 0-3
+Pinned CPU      : 0
+Motif length    : 128
+Replica         : 1
+Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1

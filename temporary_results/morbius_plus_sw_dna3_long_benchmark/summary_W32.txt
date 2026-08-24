@@ -1,0 +1,2 @@
+Seed Initialization Time: 0.23548698
+Elapsed Time           : 1541.65650606

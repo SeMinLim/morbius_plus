@@ -1,6 +1,4 @@
 Run ID          : 32687322183
 Run attempt     : 1
-Source commit   : aafd972527ff7e3ec0fc6f64a2b278a46e8b95aa
 Widths          : 32 and 128
-Replicas        : 2 per width, lowest successful replica selected
-State           : PREPARING
+State           : COMPLETED

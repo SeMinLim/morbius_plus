@@ -1,0 +1,3 @@
+motif_length	replica	status	wall_seconds	internal_seconds	user_seconds	system_seconds	max_rss_kb	exit_code	cpu_model
+32	2	COMPLETED	1542.25	1541.65650606	1541.79	0.23	156796	0	AMD EPYC 9V74 80-Core Processor
+128	1	COMPLETED	4707.21	4706.54178214	4706.16	0.48	156716	0	AMD EPYC 9V74 80-Core Processor
