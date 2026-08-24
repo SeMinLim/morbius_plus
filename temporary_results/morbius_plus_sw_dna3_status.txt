@@ -1,10 +1,6 @@
-Run ID          : 32686305738
+Run ID          : 32686707102
 Run attempt     : 1
-CPU model       : AMD EPYC 9V74 80-Core Processor
-CPU allowed     : 0-3
-Pinned CPU      : 0
 Runner image    : ubuntu-24.04
-Source commit   : 524777174fb5b84e3ba91e4e7641833b897939a9
-Compiler        : g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+Source commit   : 102acc0c9fc15504c1b24a874360318afff9b73b
 Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1
-State           : CPU_ASSIGNED
+State           : PREPARING
