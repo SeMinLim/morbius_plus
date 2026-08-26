@@ -11,129 +11,41 @@ permissions:
 jobs:
   synchronize:
     runs-on: ubuntu-latest
+    env:
+      BLUEVITIS_COMMIT: ff93553d2258117dba07e84190b55809c8650f87
+      PROTOCOL_B64: "IyBNb3JiaXVzKyBIb3N0LUtlcm5lbCBQcm90b2NvbAoKQWxsIHRyYW5zZmVycyB1c2UgNTEyLWJpdCBsaXR0bGUtZW5kaWFuIGJlYXRzLiBUaGUgMTYtcGlwZWxpbmUgY29uZmlndXJhdGlvbiB1c2VzIHByb3RvY29sIHZlcnNpb24gMi4KCiMjIENvbW1hbmQgaGVhZGVyCgp8IEJ5dGUgfCBGaWVsZCB8CnwtLS06fC0tLXwKfCAwLTMgfCBtYWdpYyBgMHg0ZDUwNGM1M2AgfAp8IDQtNSB8IHByb3RvY29sIHZlcnNpb24gMiB8CnwgNiB8IGNvbW1hbmQ6IDAgYm9vdHN0cmFwLCAxIGJhdGNoIHwKfCA3IHwgYWxwaGFiZXQgc2l6ZSB8CnwgOC05IHwgc2VxdWVuY2UgbGVuZ3RoIHwKfCAxMCB8IG1vdGlmIGxlbmd0aCB8CnwgMTEgfCBhY3RpdmUgcGlwZWxpbmUgY291bnQgfAp8IDE2LTE5IHwgcmF3IHNjb3JlIHRocmVzaG9sZCB8CnwgMjAtMjMgfCBtYXhpbXVtIHVwZGF0ZXMgfAp8IDI0LTI3IHwgYmF0Y2ggc2l6ZSB8CnwgMjgtMzEgfCA1MTItYml0IGJlYXRzIHBlciBzZXF1ZW5jZSB8CgpCb290c3RyYXAgY2FycmllcyBzZXF1ZW5jZSAwIGZvbGxvd2VkIGJ5IHNpeHRlZW4gcGh5c2ljYWwgcGlwZWxpbmUgc3RhdGVzLiBFYWNoIHN0YXRlIGNvbnRhaW5zIG9uZSBSTkctc3RhdGUgYmVhdCwgb25lIEJQTS1jb2x1bW4gYmVhdCBwZXIgbW90aWYgcG9zaXRpb24sIGFuZCBvbmUgTFBNLWNvbHVtbiBiZWF0IHBlciBtb3RpZiBwb3NpdGlvbi4gVGhlIGhvc3QgaGFzIGFscmVhZHkgcmVtb3ZlZCBzZXF1ZW5jZSAwJ3MgaW5pdGlhbCB0ZW50YXRpdmUgbW90aWYgZnJvbSBib3RoIG1hdHJpY2VzLgoKQSBzdWJzZXF1ZW50IGJhdGNoIGNhcnJpZXMgcmVwZWF0ZWQgcGFpcnMgb2Ygb25lIGVuY29kZWQgc2VxdWVuY2UgYW5kIG9uZSA1MTItYml0IG9mZnNldCBiZWF0IGNvbnRhaW5pbmcgc2l4dGVlbiAzMi1iaXQgdGVudGF0aXZlLW1vdGlmIG9mZnNldHMuCgojIyBSZXN1bHQgZ3JvdXAKCkVhY2ggcHJvY2Vzc2VkIHNlcXVlbmNlIHByb2R1Y2VzIGZvdXIgNTEyLWJpdCByZXN1bHQgYmVhdHMuIEJ5dGUgNiBpZGVudGlmaWVzIHRoZSByZXN1bHQtYmVhdCBpbmRleCBmcm9tIDAgdG8gMy4gRWFjaCBiZWF0IGNvbnRhaW5zIGZvdXIgOTYtYml0IHBpcGVsaW5lIHJlY29yZHMsIGZvciBhIHRvdGFsIG9mIHNpeHRlZW4gcmVjb3JkcyBwZXIgc2VxdWVuY2UuIEEgcmVjb3JkIGNvbnRhaW5zIHRoZSBuZXcgdGVudGF0aXZlLW1vdGlmIG9mZnNldCwgYGJlc3RVcGRhdGVgLCB0ZXJtaW5hdGlvbiBhbmQgYWN0aXZlIGZsYWdzLCBiZXN0IHNjb3JlLCBhbmQgdXBkYXRlIGNvdW50LgoKVGhlIGZpeGVkLXBvc2l0aW9uIHN1bW1hcnkgYmVhdCBpcyB3cml0dGVuIGF0IGBiYXRjaFNpemUgKiAyNTZgIGJ5dGVzIGFuZCByZXBvcnRzIHRoZSBwcm9jZXNzZWQgY291bnQsIGdsb2JhbCBjb21wbGV0aW9uLCBzZWxlY3RlZCBwaXBlbGluZSwgYW5kIGtlcm5lbCBjeWNsZSBjb3VudC4K"
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Synchronize the finalized 16-pipeline accelerator
-        env:
-          BLUEVITIS_COMMIT: ff93553d2258117dba07e84190b55809c8650f87
+      - name: Synchronize the finalized configuration
         run: |
           set -euo pipefail
 
           BLUEVITIS_RAW="https://raw.githubusercontent.com/SeMinLim/bluevitis/${BLUEVITIS_COMMIT}"
           KERNEL_DST="morbius_plus_accel/kernel_morbius_plus"
           HOST_DST="morbius_plus_accel/host_morbius_plus"
-
           mkdir -p "$KERNEL_DST" "$HOST_DST/test"
 
-          kernel_files=(
-            Axi4LiteControllerXrt.bsv
-            Axi4MemoryMaster.bsv
-            GibbsPipeline.bsv
-            KernelMain.bsv
-            KernelTop.bsv
-            Makefile
-            MorbiusTypes.bsv
-            PwlLane.bsv
-            README.md
-            RandomGenerator.bsv
-            TestGibbsPipeline.bsv
-            kernel.xml
-            makefile_us_alveo.mk
-          )
-
+          kernel_files=(Axi4LiteControllerXrt.bsv Axi4MemoryMaster.bsv GibbsPipeline.bsv KernelMain.bsv KernelTop.bsv Makefile MorbiusTypes.bsv PwlLane.bsv README.md RandomGenerator.bsv TestGibbsPipeline.bsv kernel.xml makefile_us_alveo.mk)
           for filename in "${kernel_files[@]}"; do
-            curl -fsSL \
-              "$BLUEVITIS_RAW/hw/kernel_morbius_plus/$filename" \
-              -o "$KERNEL_DST/$filename"
+            curl -fsSL "$BLUEVITIS_RAW/hw/kernel_morbius_plus/$filename" -o "$KERNEL_DST/$filename"
           done
 
-          host_files=(
-            AcceleratorMath.cpp
-            AcceleratorModel.cpp
-            AcceleratorProtocol.cpp
-            Application.cpp
-            HostOrchestrator.cpp
-            Makefile
-            MorbiusPlus.h
-            README.md
-            Result.cpp
-            SeedInitialization.cpp
-            Utility.cpp
-            main.cpp
-            main_model.cpp
-          )
-
+          host_files=(AcceleratorMath.cpp AcceleratorModel.cpp AcceleratorProtocol.cpp Application.cpp HostOrchestrator.cpp Makefile MorbiusPlus.h README.md Result.cpp SeedInitialization.cpp Utility.cpp main.cpp main_model.cpp)
           for filename in "${host_files[@]}"; do
-            curl -fsSL \
-              "$BLUEVITIS_RAW/sw/host_morbius_plus/$filename" \
-              -o "$HOST_DST/$filename"
+            curl -fsSL "$BLUEVITIS_RAW/sw/host_morbius_plus/$filename" -o "$HOST_DST/$filename"
           done
 
-          test_files=(
-            DNA_TEST.fasta
-            PROTEIN_TEST.fasta
-            run_accel_test.sh
-            test_protocol.cpp
-          )
-
+          test_files=(DNA_TEST.fasta PROTEIN_TEST.fasta run_accel_test.sh test_protocol.cpp)
           for filename in "${test_files[@]}"; do
-            curl -fsSL \
-              "$BLUEVITIS_RAW/sw/host_morbius_plus/test/$filename" \
-              -o "$HOST_DST/test/$filename"
+            curl -fsSL "$BLUEVITIS_RAW/sw/host_morbius_plus/test/$filename" -o "$HOST_DST/test/$filename"
           done
           chmod +x "$HOST_DST/test/run_accel_test.sh"
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          root_readme = Path('README.md')
-          text = root_readme.read_text(encoding='utf-8')
-          text = text.replace('--pipelines 4', '--pipelines 16')
-          root_readme.write_text(text, encoding='utf-8')
-
-          accel_readme = Path('morbius_plus_accel/README.md')
-          text = accel_readme.read_text(encoding='utf-8')
-          text = text.replace('--pipelines 4', '--pipelines 16')
-          accel_readme.write_text(text, encoding='utf-8')
-
-          protocol = Path('morbius_plus_accel/PROTOCOL.md')
-          protocol.write_text(
-              '''# Morbius+ Host-Kernel Protocol
-
-All transfers use 512-bit little-endian beats. The 16-pipeline configuration uses protocol version 2.
-
-## Command header
-
-| Byte | Field |
-|---:|---|
-| 0-3 | magic `0x4d504c53` |
-| 4-5 | protocol version 2 |
-| 6 | command: 0 bootstrap, 1 batch |
-| 7 | alphabet size |
-| 8-9 | sequence length |
-| 10 | motif length |
-| 11 | active pipeline count |
-| 16-19 | raw score threshold |
-| 20-23 | maximum updates |
-| 24-27 | batch size |
-| 28-31 | 512-bit beats per sequence |
-
-Bootstrap carries sequence 0 followed by sixteen physical pipeline states. Each state contains one RNG-state beat, one BPM-column beat per motif position, and one LPM-column beat per motif position. The host has already removed sequence 0's initial tentative motif from both matrices.
-
-A subsequent batch carries repeated pairs of one encoded sequence and one 512-bit offset beat containing sixteen 32-bit tentative-motif offsets.
-
-## Result group
-
-Each processed sequence produces four 512-bit result beats. Byte 6 identifies the result-beat index from 0 to 3. Each beat contains four 96-bit pipeline records, for a total of sixteen records per sequence. A record contains the new tentative-motif offset, `bestUpdate`, termination and active flags, best score, and update count.
-
-The fixed-position summary beat is written at `batchSize * 256` bytes and reports the processed count, global completion, selected pipeline, and kernel cycle count.
-''',
-              encoding='utf-8'
-          )
-          PY
+          sed -i 's/--pipelines 4/--pipelines 16/g' README.md morbius_plus_accel/README.md
+          printf '%s' "$PROTOCOL_B64" | base64 --decode > morbius_plus_accel/PROTOCOL.md
 
       - name: Verify synchronized parameters
         run: |
@@ -147,8 +59,7 @@ The fixed-position summary beat is written at `batchSize * 256` bytes and report
           grep -q '^#define ACCELPROTOCOLVERSION 2' morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
           grep -q 'ACCELRESULTBYTES' morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
           grep -q 'four 512-bit result beats' morbius_plus_accel/PROTOCOL.md
-          if grep -R --line-number --fixed-strings -- '--pipelines 4' \
-              README.md morbius_plus_accel; then
+          if grep -R --line-number --fixed-strings -- '--pipelines 4' README.md morbius_plus_accel; then
             echo 'A stale four-pipeline invocation remains.'
             exit 1
           fi
@@ -156,8 +67,9 @@ The fixed-position summary beat is written at `batchSize * 256` bytes and report
       - name: Commit directly to main
         run: |
           rm .github/workflows/temporary-sync-morbius-plus-16p.yml
+          rm -f .github/workflows/temporary-update-morbius-pe.yml
           git config user.name "OpenAI"
           git config user.email "openai@users.noreply.github.com"
-          git add README.md morbius_plus_accel .github/workflows/temporary-sync-morbius-plus-16p.yml
+          git add README.md morbius_plus_accel .github/workflows
           git commit -m "Scale Morbius+ accelerator to 16 pipelines"
           git push origin HEAD:main
