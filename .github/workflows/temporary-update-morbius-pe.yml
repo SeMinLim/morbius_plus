@@ -1,0 +1,26 @@
+name: Temporary Morbius Plus PE Update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/temporary-update-morbius-pe.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply the 16-pipeline 128-wide configuration
+        env:
+          UPDATE_SCRIPT_B64: >-
+          ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCByZQoKUk9PVCA9IFBhdGgoJy4nKQpLRVJORUwgPSBST09UIC8gJ21vcmJpdXNfcGx1c19hY2NlbCcgLyAna2VybmVsX21vcmJpdXNfcGx1cycKSE9TVCA9IFJPT1QgLyAnbW9yYml1c19wbHVzX2FjY2VsJyAvICdob3N0X21vcmJpdXNfcGx1cycKCk1PUkJJVVNfVFlQRVMgPSByJycnbW9kdWxlIE1vcmJpdXNUeXBlczsKCmltcG9ydCBWZWN0b3I6Oio7CgoKdHlwZWRlZiAxNiBOdW1QaXBlbGluZTsKdHlwZWRlZiAxMjggTnVtUEVfUHJvZmlsZXI7CnR5cGVkZWYgNCBOdW1QRV9MUE07CnR5cGVkZWYgVExvZyMoTnVtUGlwZWxpbmUpIFBpcGVsaW5lSW5kZXhXaWR0aDsKdHlwZWRlZiBUTG9nIyhOdW1QRV9Qcm9maWxlcikgUHJvZmlsZXJPZmZzZXRXaWR0aDsKdHlwZWRlZiBUQWRkIyhQcm9maWxlck9mZnNldFdpZHRoLCAxKSBQcm9maWxlclZhbGlkV2lkdGg7CnR5cGVkZWYgNCBQaXBlbGluZVBlclJlc3VsdEJlYXQ7CnR5cGVkZWYgVERpdiMoTnVtUGlwZWxpbmUsIFBpcGVsaW5lUGVyUmVzdWx0QmVhdCkgUmVzdWx0QmVhdE51bTsKdHlwZWRlZiBUTG9nIyhSZXN1bHRCZWF0TnVtKSBSZXN1bHRCZWF0SW5kZXhXaWR0aDsKdHlwZWRlZiAxNiBTZXF1ZW5jZUJlYXROdW07CnR5cGVkZWYgMTI4IE1vdGlmTGVuZ3RoTWF4Owp0eXBlZGVmIDIwIEFscGhhYmV0TWF4Owp0eXBlZGVmIDMyIE1vdGlmQmFua0RlcHRoOwp0eXBlZGVmIDEyOCBTZWdtZW50TWF4OwoKdHlwZWRlZiBCaXQjKDM2MCkgTWF0cml4Q29sdW1uOwp0eXBlZGVmIFVJbnQjKDE4KSBCcG1Db3VudDsKdHlwZWRlZiBVSW50IygxOSkgUHdsVmFsdWU7CnR5cGVkZWYgVUludC4uLgo=
