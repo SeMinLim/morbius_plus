@@ -44,7 +44,7 @@ make test
 ```bash
 cd morbius_plus_accel/kernel_morbius_plus
 make all TARGET=hw_emu
-make run TARGET=hw_emu MORBIUS_ARGS="--input <dataset.fasta> --output <result_prefix> --alphabet dna --motif-length 16 --pipelines 4 --score-threshold 0.90 --seed 1"
+make run TARGET=hw_emu MORBIUS_ARGS="--input <dataset.fasta> --output <result_prefix> --alphabet dna --motif-length 16 --pipelines 16 --score-threshold 0.90 --seed 1"
 ```
 
 Use `TARGET=hw` for the physical Alveo U50.
