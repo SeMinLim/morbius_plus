@@ -86,11 +86,10 @@ void printUsage( const char *programName ) {
 	printf( "Usage: %s --input <FASTA> --output <PREFIX> --alphabet <dna|protein> --motif-length <N> [Options]\n", programName );
 	printf( "\n" );
 	printf( "Options:\n" );
-	printf( "  --pipelines <N>        Number of independent Gibbs pipelines [default: %d]\n", DEFAULTNUMPIPELINE );
 	printf( "  --max-updates <N>      Maximum updates per pipeline [default: %d x sequence count]\n", DEFAULTMAXSWEEPNUM );
 	printf( "  --score-threshold <F>  Normalized agreement threshold in [0, 1] [default: %.2f]\n", DEFAULTSCORETHRESHOLD );
 	printf( "  --seed <N>             Random seed [default: %d]\n", DEFAULTSEED );
-	printf( "  --threads <N>          Concurrent CPU threads [default: pipeline count]\n" );
+	printf( "  --threads <N>          Concurrent CPU threads [default: %d]\n", NUMPIPELINE );
 	printf( "  --help                 Print this message\n" );
 }
 
@@ -124,7 +123,6 @@ double parseFloatingPoint( const char *value, const char *name ) {
 void parseArguments( int argc, char **argv, Config *config ) {
 	config->alphabetMode = -1;
 	config->motifLength = 0;
-	config->numPipeline = DEFAULTNUMPIPELINE;
 	config->maxUpdateNum = 0;
 	config->scoreThreshold = DEFAULTSCORETHRESHOLD;
 	config->randomSeed = DEFAULTSEED;
@@ -145,8 +143,6 @@ void parseArguments( int argc, char **argv, Config *config ) {
 			}
 		} else if ( string(argv[i]) == "--motif-length" && i + 1 < argc ) {
 			config->motifLength = (size_t)parseUnsignedInteger(argv[++i], "--motif-length");
-		} else if ( string(argv[i]) == "--pipelines" && i + 1 < argc ) {
-			config->numPipeline = (int)parseUnsignedInteger(argv[++i], "--pipelines");
 		} else if ( string(argv[i]) == "--max-updates" && i + 1 < argc ) {
 			config->maxUpdateNum = parseUnsignedInteger(argv[++i], "--max-updates");
 		} else if ( string(argv[i]) == "--score-threshold" && i + 1 < argc ) {
@@ -168,10 +164,6 @@ void parseArguments( int argc, char **argv, Config *config ) {
 	if ( config->inputFilename.empty() || config->outputPrefix.empty() ||
 	     config->alphabetMode < 0 || config->motifLength == 0 ) {
 		printUsage(argv[0]);
-		exit(1);
-	}
-	if ( config->numPipeline < 1 ) {
-		printf( "The number of pipelines must be larger than zero.\n" );
 		exit(1);
 	}
 	if ( config->scoreThreshold < 0.0 || config->scoreThreshold > 1.0 ) {

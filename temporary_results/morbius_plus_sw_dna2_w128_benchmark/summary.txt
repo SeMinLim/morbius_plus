@@ -1,5 +1,0 @@
-Seed Initialization Time: 0.12397504
-Selected Pipeline      : 2
-Normalized Best Score  : 0.38904870
-Pipeline Updates       : 1310720
-Elapsed Time           : 2251.18380094

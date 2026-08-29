@@ -18,7 +18,7 @@
 #define SEGMENTSIZE 32
 #define PSEUDOCOUNT 1
 #define RANDOMFRACTIONBITS 24
-#define DEFAULTNUMPIPELINE 16
+#define NUMPIPELINE 16
 #define DEFAULTMAXSWEEPNUM 20
 #define DEFAULTSCORETHRESHOLD 0.90
 #define DEFAULTSEED 1
@@ -30,7 +30,6 @@ typedef struct Config {
 	std::string outputPrefix;
 	int alphabetMode;
 	size_t motifLength;
-	int numPipeline;
 	uint64_t maxUpdateNum;
 	double scoreThreshold;
 	uint64_t randomSeed;

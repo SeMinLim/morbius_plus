@@ -1,6 +1,0 @@
-Run ID          : 32652062986
-Run attempt     : 1
-Runner image    : ubuntu-24.04
-Source commit   : 62b2d0f63f3b295513a970747be6e51917e102a3
-Configuration   : 16 pipelines, 1 CPU thread, score threshold 0.90, seed 1
-State           : PREPARING

@@ -33,7 +33,6 @@ make
     --output <result_prefix> \
     --alphabet dna \
     --motif-length 16 \
-    --pipelines 16 \
     --score-threshold 0.90 \
     --seed 1
 ```
@@ -48,7 +47,6 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 
 ## Main Options
 
-- `--pipelines <N>`: number of independent Gibbs pipelines
 - `--max-updates <N>`: maximum sequence updates per pipeline
 - `--score-threshold <F>`: normalized Overall Consensus Agreement Score threshold in `[0, 1]`
 - `--seed <N>`: random seed

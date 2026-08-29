@@ -11,7 +11,6 @@ mkdir -p "$OUTPUT_DIR"
 	--output "$OUTPUT_DIR/dna_result" \
 	--alphabet dna \
 	--motif-length 8 \
-	--pipelines 4 \
 	--max-updates 1024 \
 	--score-threshold 0.85 \
 	--seed 1 \
@@ -22,7 +21,6 @@ mkdir -p "$OUTPUT_DIR"
 	--output "$OUTPUT_DIR/protein_result" \
 	--alphabet protein \
 	--motif-length 6 \
-	--pipelines 4 \
 	--max-updates 1024 \
 	--score-threshold 0.80 \
 	--seed 1 \

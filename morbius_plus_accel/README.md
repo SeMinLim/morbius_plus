@@ -24,7 +24,6 @@ make test
 ```bash
 cd kernel_morbius_plus
 make all TARGET=hw_emu
-make run TARGET=hw_emu MORBIUS_ARGS="--input /path/to/input.fa --output output/result --alphabet dna --motif-length 16 --pipelines 16 --max-updates 32768 --score-threshold 1.0 --seed 1"
 ```
 
 Use `TARGET=hw` for the physical U50 after enabling XRT host memory.

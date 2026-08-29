@@ -1,4 +1,0 @@
-Run ID          : 32687322183
-Run attempt     : 1
-Widths          : 32 and 128
-State           : COMPLETED

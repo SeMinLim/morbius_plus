@@ -399,15 +399,15 @@ void runPipelines( const Config *config,
 		   const Dataset *dataset,
 		   const SeedModel *seedModel,
 		   vector<PipelineResult> &pipelineResults ) {
-	pipelineResults.resize((size_t)config->numPipeline);
+	pipelineResults.resize((size_t)NUMPIPELINE);
 	uint64_t rawScoreThreshold = calculateRawScoreThreshold(config, dataset);
 	int threadNum = config->threadNum;
-	if ( threadNum == 0 ) threadNum = config->numPipeline;
-	threadNum = min(threadNum, config->numPipeline);
+	if ( threadNum == 0 ) threadNum = NUMPIPELINE;
+	threadNum = min(threadNum, NUMPIPELINE);
 	if ( threadNum < 1 ) threadNum = 1;
 
-	for ( int batchStart = 0; batchStart < config->numPipeline; batchStart += threadNum ) {
-		int batchNum = min(threadNum, config->numPipeline - batchStart);
+	for ( int batchStart = 0; batchStart < NUMPIPELINE; batchStart += threadNum ) {
+		int batchNum = min(threadNum, NUMPIPELINE - batchStart);
 		vector<thread> workers;
 		workers.reserve((size_t)batchNum);
 		for ( int workerIdx = 0; workerIdx < batchNum; workerIdx ++ ) {
