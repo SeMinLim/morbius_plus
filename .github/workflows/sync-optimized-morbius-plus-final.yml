@@ -1,0 +1,58 @@
+name: Sync optimized Morbius Plus accelerator
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/sync-optimized-morbius-plus-final.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Synchronize sources and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch main https://github.com/SeMinLim/bluevitis.git /tmp/bluevitis
+
+          git rm -r morbius_plus_accel/kernel_morbius_plus
+          mkdir -p morbius_plus_accel/kernel_morbius_plus
+          cp -a /tmp/bluevitis/hw/kernel_morbius_plus/. morbius_plus_accel/kernel_morbius_plus/
+          cp /tmp/bluevitis/sw/host_morbius_plus/AcceleratorModel.cpp morbius_plus_accel/host_morbius_plus/AcceleratorModel.cpp
+          cp /tmp/bluevitis/sw/host_morbius_plus/MorbiusPlus.h morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
+
+          git rm -r .github
+          git rm -r --ignore-unmatch temporary_results
+          git rm -r --ignore-unmatch morbius_plus_accel/host_morbius_plus/obj
+          git rm --ignore-unmatch morbius_plus_accel/VALIDATION.md
+
+          cmp /tmp/bluevitis/sw/host_morbius_plus/AcceleratorModel.cpp morbius_plus_accel/host_morbius_plus/AcceleratorModel.cpp
+          cmp /tmp/bluevitis/sw/host_morbius_plus/MorbiusPlus.h morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
+          diff -qr /tmp/bluevitis/hw/kernel_morbius_plus morbius_plus_accel/kernel_morbius_plus
+          grep -Fq '#define ACCELSEGMENTSIZE 16' morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
+          grep -Fq 'typedef 16 NumPipeline;' morbius_plus_accel/kernel_morbius_plus/MorbiusTypes.bsv
+          grep -Fq 'typedef 16 NumPE_Profiler;' morbius_plus_accel/kernel_morbius_plus/MorbiusTypes.bsv
+          grep -Fq 'typedef 4 NumPE_LPM;' morbius_plus_accel/kernel_morbius_plus/MorbiusTypes.bsv
+          grep -Fq 'module mkGibbsPipelineArray' morbius_plus_accel/kernel_morbius_plus/GibbsPipeline.bsv
+          grep -Fq 'module MorbiusSdpRam' morbius_plus_accel/kernel_morbius_plus/MorbiusSdpRam.v
+
+          g++ -std=c++17 -Wall -Wextra -pedantic -O2 -I morbius_plus_accel/host_morbius_plus -c morbius_plus_accel/host_morbius_plus/AcceleratorModel.cpp -o /tmp/AcceleratorModel.o
+
+          git config user.name 'Se-Min Lim'
+          git config user.email 'seminl1@kookmin.ac.kr'
+          git add -A
+          git commit -m 'Optimize Morbius+ resource utilization for U50'
+          git push origin HEAD:main
