@@ -1,0 +1,80 @@
+name: Synchronize verified Morbius+ 32-lane sources
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/sync-verified-profiler32.yml']
+permissions:
+  contents: write
+concurrency:
+  group: morbius-profiler32-sync
+  cancel-in-progress: false
+jobs:
+  synchronize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_BASE: 903add283bbf4429fab6bad7239ad7c3fb85d44c
+      BLUE_PUBLISH_PARENT: 4fb5442567d515e2daedd0fa9e3fca1a0d932443
+      GIT_AUTHOR_NAME: Se-Min Lim
+      GIT_AUTHOR_EMAIL: seminl1@kookmin.ac.kr
+      GIT_COMMITTER_NAME: Se-Min Lim
+      GIT_COMMITTER_EMAIL: seminl1@kookmin.ac.kr
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Wait for the exact verified blueVitis publication
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_BASE"
+          test "$(git diff --name-only "$EXPECTED_BASE" HEAD)" = '.github/workflows/sync-verified-profiler32.yml'
+          test -z "$(git ls-tree -r --name-only "$EXPECTED_BASE" | grep '^.github/' || true)"
+          git clone --quiet --depth 2 --branch main https://github.com/SeMinLim/bluevitis.git /tmp/bluevitis32
+          ready=0
+          for attempt in $(seq 1 60); do
+            git -C /tmp/bluevitis32 fetch --quiet --depth 2 origin main
+            git -C /tmp/bluevitis32 checkout --quiet --detach origin/main
+            if test "$(git -C /tmp/bluevitis32 rev-parse HEAD^)" = "$BLUE_PUBLISH_PARENT"; then
+              ready=1
+              break
+            fi
+            sleep 10
+          done
+          test "$ready" = 1
+          test "$(git -C /tmp/bluevitis32 log -1 --format=%s)" = 'Expand Morbius+ to 32 Profiler PEs and 32 PWL lanes'
+          test "$(git -C /tmp/bluevitis32 log -1 --format='%an <%ae>')" = 'Se-Min Lim <seminl1@kookmin.ac.kr>'
+          test "$(git -C /tmp/bluevitis32 log -1 --format='%cn <%ce>')" = 'Se-Min Lim <seminl1@kookmin.ac.kr>'
+          test -z "$(git -C /tmp/bluevitis32 ls-tree -r --name-only HEAD | grep '^.github/' || true)"
+          grep -Fq 'typedef 32 NumPE_Profiler;' /tmp/bluevitis32/hw/kernel_morbius_plus/MorbiusTypes.bsv
+          grep -Fq '#define ACCELSEGMENTSIZE 32' /tmp/bluevitis32/sw/host_morbius_plus/MorbiusPlus.h
+          git -C /tmp/bluevitis32 show -s --format='%H%n%s' HEAD
+      - name: Synchronize and test the matching kernel and host model
+        run: |
+          set -euo pipefail
+          git rm -r morbius_plus_accel/kernel_morbius_plus
+          mkdir -p morbius_plus_accel/kernel_morbius_plus
+          cp -a /tmp/bluevitis32/hw/kernel_morbius_plus/. morbius_plus_accel/kernel_morbius_plus/
+          cp /tmp/bluevitis32/sw/host_morbius_plus/MorbiusPlus.h morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
+          diff -qr /tmp/bluevitis32/hw/kernel_morbius_plus morbius_plus_accel/kernel_morbius_plus
+          cmp /tmp/bluevitis32/sw/host_morbius_plus/MorbiusPlus.h morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
+          cmp /tmp/bluevitis32/sw/host_morbius_plus/AcceleratorModel.cpp morbius_plus_accel/host_morbius_plus/AcceleratorModel.cpp
+          make -C morbius_plus_accel/host_morbius_plus test CXXFLAGS='-std=c++17 -Wall -Wextra -pedantic -Werror -O2'
+          make -C morbius_plus_accel/host_morbius_plus clean
+      - name: Remove temporary workflow and publish directly to main
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+          git rm -r -f .github
+          git add -- morbius_plus_accel/kernel_morbius_plus morbius_plus_accel/host_morbius_plus/MorbiusPlus.h
+          git diff --cached --check
+          git config user.name 'Se-Min Lim'
+          git config user.email 'seminl1@kookmin.ac.kr'
+          git commit -m 'Expand Morbius+ to 32 Profiler PEs and 32 PWL lanes'
+          test -z "$(git ls-tree -r --name-only HEAD | grep '^.github/' || true)"
+          test "$(git rev-parse HEAD:morbius_plus_accel/kernel_morbius_plus)" = "$(git -C /tmp/bluevitis32 rev-parse HEAD:hw/kernel_morbius_plus)"
+          test "$(git rev-parse HEAD:morbius_plus_accel/host_morbius_plus/MorbiusPlus.h)" = "$(git -C /tmp/bluevitis32 rev-parse HEAD:sw/host_morbius_plus/MorbiusPlus.h)"
+          git push origin HEAD:main
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$(git rev-parse HEAD)"
+          git show -s --format='%H%n%an <%ae>%n%cn <%ce>%n%s' HEAD
+          git rev-parse HEAD:morbius_plus_accel/kernel_morbius_plus
