@@ -26,7 +26,7 @@ make test
     --output <result_prefix> \
     --alphabet dna \
     --motif-length 16 \
-    --score-threshold 0.90 \
+    --score-threshold 0.80 \
     --seed 1
 ```
 
