@@ -1,5 +1,6 @@
 #include "MorbiusPlus.h"
 
+#include <errno.h>
 #include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,6 +87,10 @@ void printUsage( const char *programName ) {
 	printf( "Usage: %s --input <FASTA> --output <PREFIX> --alphabet <dna|protein> --motif-length <N> [Options]\n", programName );
 	printf( "\n" );
 	printf( "Options:\n" );
+	printf( "  --motif-count <N>      Top unique motifs to output [default: %d; at most %d available]\n",
+		DEFAULTOUTPUTMOTIFNUM,
+		NUMPIPELINE
+	);
 	printf( "  --max-updates <N>      Maximum updates per pipeline [default: %d x sequence count]\n", DEFAULTMAXSWEEPNUM );
 	printf( "  --score-threshold <F>  Normalized agreement threshold in [0, 1] [default: %.2f]\n", DEFAULTSCORETHRESHOLD );
 	printf( "  --seed <N>             Random seed [default: %d]\n", DEFAULTSEED );
@@ -100,8 +105,9 @@ uint64_t parseUnsignedInteger( const char *value, const char *name ) {
 		exit(1);
 	}
 	char *end = NULL;
+	errno = 0;
 	unsigned long long result = strtoull(value, &end, 10);
-	if ( end == value || *end != '\0' ) {
+	if ( errno == ERANGE || end == value || *end != '\0' ) {
 		printf( "Invalid value for %s: %s\n", name, value );
 		exit(1);
 	}
@@ -127,6 +133,7 @@ void parseArguments( int argc, char **argv, Config *config ) {
 	config->scoreThreshold = DEFAULTSCORETHRESHOLD;
 	config->randomSeed = DEFAULTSEED;
 	config->threadNum = 0;
+	config->outputMotifNum = DEFAULTOUTPUTMOTIFNUM;
 
 	for ( int i = 1; i < argc; i ++ ) {
 		if ( string(argv[i]) == "--input" && i + 1 < argc ) {
@@ -143,6 +150,8 @@ void parseArguments( int argc, char **argv, Config *config ) {
 			}
 		} else if ( string(argv[i]) == "--motif-length" && i + 1 < argc ) {
 			config->motifLength = (size_t)parseUnsignedInteger(argv[++i], "--motif-length");
+		} else if ( string(argv[i]) == "--motif-count" && i + 1 < argc ) {
+			config->outputMotifNum = parseUnsignedInteger(argv[++i], "--motif-count");
 		} else if ( string(argv[i]) == "--max-updates" && i + 1 < argc ) {
 			config->maxUpdateNum = parseUnsignedInteger(argv[++i], "--max-updates");
 		} else if ( string(argv[i]) == "--score-threshold" && i + 1 < argc ) {
@@ -168,6 +177,10 @@ void parseArguments( int argc, char **argv, Config *config ) {
 	}
 	if ( config->scoreThreshold < 0.0 || config->scoreThreshold > 1.0 ) {
 		printf( "The score threshold must be in [0, 1].\n" );
+		exit(1);
+	}
+	if ( config->outputMotifNum == 0 ) {
+		printf( "The motif count must be at least 1.\n" );
 		exit(1);
 	}
 	if ( config->threadNum < 0 ) {

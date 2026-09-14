@@ -22,6 +22,7 @@
 #define DEFAULTMAXSWEEPNUM 20
 #define DEFAULTSCORETHRESHOLD 0.80
 #define DEFAULTSEED 1
+#define DEFAULTOUTPUTMOTIFNUM 1
 #define DNAENTROPYMIN 1.20
 
 
@@ -34,6 +35,7 @@ typedef struct Config {
 	double scoreThreshold;
 	uint64_t randomSeed;
 	int threadNum;
+	uint64_t outputMotifNum;
 }Config;
 
 typedef struct Dataset {
@@ -98,6 +100,12 @@ typedef struct PipelineResult {
 	double elapsedTime;
 }PipelineResult;
 
+typedef struct OutputMotif {
+	int pipelineIdx;
+	std::vector<uint32_t> count;
+	std::string consensus;
+}OutputMotif;
+
 
 double timeChecker( void );
 uint64_t integerPower( uint64_t base, size_t exponent );
@@ -147,32 +155,36 @@ void buildResultCount( const Config *config,
 std::string buildConsensus( const Config *config,
 			    const Dataset *dataset,
 			    const std::vector<uint32_t> &count );
+void selectOutputMotifs( const Config *config,
+			 const Dataset *dataset,
+			 const std::vector<PipelineResult> &pipelineResults,
+			 std::vector<OutputMotif> &outputMotifs );
 void createOutputDirectory( const std::string &outputPrefix );
 void writeMotifFASTA( const Config *config,
 		      const Dataset *dataset,
-		      const std::vector<uint32_t> &offsets );
+		      const std::vector<PipelineResult> &pipelineResults,
+		      const std::vector<OutputMotif> &outputMotifs );
 void writeOffsets( const Config *config,
 		   const Dataset *dataset,
-		   const std::vector<uint32_t> &offsets );
+		   const std::vector<PipelineResult> &pipelineResults,
+		   const std::vector<OutputMotif> &outputMotifs );
 void writePWM( const Config *config,
 	       const Dataset *dataset,
-	       const std::vector<uint32_t> &count );
+	       const std::vector<OutputMotif> &outputMotifs );
 void writeMEME( const Config *config,
 		const Dataset *dataset,
-		const std::vector<uint32_t> &count );
+		const std::vector<OutputMotif> &outputMotifs );
 void writeSummary( const Config *config,
 		   const Dataset *dataset,
 		   const SeedModel *seedModel,
 		   const std::vector<PipelineResult> &pipelineResults,
-		   int bestPipelineIdx,
-		   const std::string &consensus,
+		   const std::vector<OutputMotif> &outputMotifs,
 		   double elapsedTime );
 void printResult( const Config *config,
 		  const Dataset *dataset,
 		  const SeedModel *seedModel,
 		  const std::vector<PipelineResult> &pipelineResults,
-		  int bestPipelineIdx,
-		  const std::string &consensus,
+		  const std::vector<OutputMotif> &outputMotifs,
 		  double elapsedTime );
 
 #endif

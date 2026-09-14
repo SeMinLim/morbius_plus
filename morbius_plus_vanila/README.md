@@ -16,7 +16,7 @@
 - xoshiro128+ random generation
 - Overall Consensus Agreement Score
 - Pipeline-local best-score management
-- Independent pipeline termination and final Max Filter
+- Independent pipeline termination and score-ranked unique motif output
 - FASTA, offsets, PWM, MEME, and summary outputs
 
 ## Build
@@ -33,6 +33,7 @@ make
     --output <result_prefix> \
     --alphabet dna \
     --motif-length 16 \
+    --motif-count 5 \
     --score-threshold 0.80 \
     --seed 1
 ```
@@ -47,6 +48,7 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 
 ## Main Options
 
+- `--motif-count <N>`: number of top unique motifs to output (default: `1`)
 - `--max-updates <N>`: maximum sequence updates per pipeline
 - `--score-threshold <F>`: normalized Overall Consensus Agreement Score threshold in `[0, 1]`
 - `--seed <N>`: random seed
@@ -61,6 +63,8 @@ For output prefix `result/morbius_plus`, the program generates:
 - `result/morbius_plus.pwm.tsv`
 - `result/morbius_plus.meme`
 - `result/morbius_plus.summary.txt`
+
+With `--motif-count 1`, the original single-motif output formats and `MorbiusPlus` MEME ID are preserved. For larger values, candidates already produced by the 16 pipelines are ranked by score and exact duplicate PWMs are removed. The combined files identify motifs by 1-based rank, and the MEME IDs are `MorbiusPlus_1`, `MorbiusPlus_2`, and so on. If fewer unique candidates are available than requested, only the available motifs are written and the requested and reported counts are recorded in the summary.
 
 ## Test
 

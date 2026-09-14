@@ -44,6 +44,69 @@ string buildConsensus( const Config *config,
 	return consensus;
 }
 
+// Select the highest-scoring unique motifs from completed pipelines
+void selectOutputMotifs( const Config *config,
+			 const Dataset *dataset,
+			 const vector<PipelineResult> &pipelineResults,
+			 vector<OutputMotif> &outputMotifs ) {
+	outputMotifs.clear();
+	if ( pipelineResults.empty() ) {
+		printf( "No pipeline result is available for output.\n" );
+		fflush( stdout );
+		exit(1);
+	}
+
+	// Preserve the original single-motif Max Filter path
+	if ( config->outputMotifNum == 1 ) {
+		OutputMotif outputMotif;
+		outputMotif.pipelineIdx = selectBestPipeline(pipelineResults);
+		buildResultCount(config,
+				 dataset,
+				 pipelineResults[outputMotif.pipelineIdx].bestOffsets,
+				 outputMotif.count);
+		outputMotif.consensus = buildConsensus(config, dataset, outputMotif.count);
+		outputMotifs.push_back(outputMotif);
+		return;
+	}
+
+	vector<uint8_t> pipelineProcessed(pipelineResults.size(), 0);
+	size_t processedNum = 0;
+	while ( processedNum < pipelineResults.size() &&
+		(uint64_t)outputMotifs.size() < config->outputMotifNum ) {
+		int bestPipelineIdx = -1;
+		for ( int pipelineIdx = 0; pipelineIdx < (int)pipelineResults.size(); pipelineIdx ++ ) {
+			if ( pipelineProcessed[pipelineIdx] ) continue;
+			if ( bestPipelineIdx < 0 ||
+			     pipelineResults[pipelineIdx].bestScore >
+			     pipelineResults[bestPipelineIdx].bestScore ) {
+				bestPipelineIdx = pipelineIdx;
+			}
+		}
+
+		pipelineProcessed[bestPipelineIdx] = 1;
+		processedNum ++;
+
+		OutputMotif outputMotif;
+		outputMotif.pipelineIdx = bestPipelineIdx;
+		buildResultCount(config,
+				 dataset,
+				 pipelineResults[bestPipelineIdx].bestOffsets,
+				 outputMotif.count);
+
+		bool duplicate = false;
+		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			if ( outputMotifs[motifIdx].count == outputMotif.count ) {
+				duplicate = true;
+				break;
+			}
+		}
+		if ( duplicate ) continue;
+
+		outputMotif.consensus = buildConsensus(config, dataset, outputMotif.count);
+		outputMotifs.push_back(outputMotif);
+	}
+}
+
 // Create an output directory
 void createOutputDirectory( const string &outputPrefix ) {
 	filesystem::path outputPath(outputPrefix);
@@ -61,7 +124,8 @@ void createOutputDirectory( const string &outputPrefix ) {
 // Write discovered motif sites in FASTA format
 void writeMotifFASTA( const Config *config,
 		      const Dataset *dataset,
-		      const vector<uint32_t> &offsets ) {
+		      const vector<PipelineResult> &pipelineResults,
+		      const vector<OutputMotif> &outputMotifs ) {
 	string filename = config->outputPrefix + ".fasta";
 	ofstream outputFile(filename);
 	if ( outputFile.is_open() == false ) {
@@ -69,9 +133,27 @@ void writeMotifFASTA( const Config *config,
 		exit(1);
 	}
 
-	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
-		outputFile << ">" << dataset->names[seqIdx] << " offset=" << offsets[seqIdx] << "\n";
-		outputFile << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength) << "\n";
+	if ( config->outputMotifNum == 1 ) {
+		const vector<uint32_t> &offsets =
+			pipelineResults[outputMotifs[0].pipelineIdx].bestOffsets;
+		for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+			outputFile << ">" << dataset->names[seqIdx] << " offset=" << offsets[seqIdx] << "\n";
+			outputFile << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength) << "\n";
+		}
+	} else {
+		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			int pipelineIdx = outputMotifs[motifIdx].pipelineIdx;
+			const vector<uint32_t> &offsets = pipelineResults[pipelineIdx].bestOffsets;
+			for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+				outputFile << ">MorbiusPlus_" << motifIdx + 1 << "|" << seqIdx
+					   << " motif_rank=" << motifIdx + 1
+					   << " pipeline=" << pipelineIdx
+					   << " offset=" << offsets[seqIdx]
+					   << " source=" << dataset->names[seqIdx] << "\n";
+				outputFile << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
+					   << "\n";
+			}
+		}
 	}
 	outputFile.close();
 }
@@ -79,7 +161,8 @@ void writeMotifFASTA( const Config *config,
 // Write sequence offsets
 void writeOffsets( const Config *config,
 		   const Dataset *dataset,
-		   const vector<uint32_t> &offsets ) {
+		   const vector<PipelineResult> &pipelineResults,
+		   const vector<OutputMotif> &outputMotifs ) {
 	string filename = config->outputPrefix + ".offsets.tsv";
 	ofstream outputFile(filename);
 	if ( outputFile.is_open() == false ) {
@@ -87,13 +170,32 @@ void writeOffsets( const Config *config,
 		exit(1);
 	}
 
-	outputFile << "SequenceIdx\tSequenceName\tOffset\tMotif\n";
-	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
-		outputFile << seqIdx << "\t"
-			   << dataset->names[seqIdx] << "\t"
-			   << offsets[seqIdx] << "\t"
-			   << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
-			   << "\n";
+	if ( config->outputMotifNum == 1 ) {
+		const vector<uint32_t> &offsets =
+			pipelineResults[outputMotifs[0].pipelineIdx].bestOffsets;
+		outputFile << "SequenceIdx\tSequenceName\tOffset\tMotif\n";
+		for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+			outputFile << seqIdx << "\t"
+				   << dataset->names[seqIdx] << "\t"
+				   << offsets[seqIdx] << "\t"
+				   << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
+				   << "\n";
+		}
+	} else {
+		outputFile << "MotifRank\tPipelineIdx\tSequenceIdx\tSequenceName\tOffset\tMotif\n";
+		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			int pipelineIdx = outputMotifs[motifIdx].pipelineIdx;
+			const vector<uint32_t> &offsets = pipelineResults[pipelineIdx].bestOffsets;
+			for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+				outputFile << motifIdx + 1 << "\t"
+					   << pipelineIdx << "\t"
+					   << seqIdx << "\t"
+					   << dataset->names[seqIdx] << "\t"
+					   << offsets[seqIdx] << "\t"
+					   << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
+					   << "\n";
+			}
+		}
 	}
 	outputFile.close();
 }
@@ -101,7 +203,7 @@ void writeOffsets( const Config *config,
 // Write a PWM table
 void writePWM( const Config *config,
 	       const Dataset *dataset,
-	       const vector<uint32_t> &count ) {
+	       const vector<OutputMotif> &outputMotifs ) {
 	string filename = config->outputPrefix + ".pwm.tsv";
 	ofstream outputFile(filename);
 	if ( outputFile.is_open() == false ) {
@@ -109,23 +211,48 @@ void writePWM( const Config *config,
 		exit(1);
 	}
 
-	outputFile << "Position";
-	for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
-		outputFile << "\t" << dataset->alphabet[symbol];
-	}
-	outputFile << "\n";
-
 	double denominator = (double)dataset->sequences.size() +
 			     (double)dataset->alphabetSize * PSEUDOCOUNT;
-	for ( size_t column = 0; column < config->motifLength; column ++ ) {
-		outputFile << column;
+	if ( config->outputMotifNum == 1 ) {
+		outputFile << "Position";
 		for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
-			double probability =
-				((double)count[(size_t)symbol * config->motifLength + column] + PSEUDOCOUNT) /
-				denominator;
-			outputFile << "\t" << probability;
+			outputFile << "\t" << dataset->alphabet[symbol];
 		}
 		outputFile << "\n";
+
+		const vector<uint32_t> &count = outputMotifs[0].count;
+		for ( size_t column = 0; column < config->motifLength; column ++ ) {
+			outputFile << column;
+			for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
+				double probability =
+					((double)count[(size_t)symbol * config->motifLength + column] + PSEUDOCOUNT) /
+					denominator;
+				outputFile << "\t" << probability;
+			}
+			outputFile << "\n";
+		}
+	} else {
+		outputFile << "MotifRank\tPipelineIdx\tPosition";
+		for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
+			outputFile << "\t" << dataset->alphabet[symbol];
+		}
+		outputFile << "\n";
+
+		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			const vector<uint32_t> &count = outputMotifs[motifIdx].count;
+			for ( size_t column = 0; column < config->motifLength; column ++ ) {
+				outputFile << motifIdx + 1 << "\t"
+					   << outputMotifs[motifIdx].pipelineIdx << "\t"
+					   << column;
+				for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
+					double probability =
+						((double)count[(size_t)symbol * config->motifLength + column] + PSEUDOCOUNT) /
+						denominator;
+					outputFile << "\t" << probability;
+				}
+				outputFile << "\n";
+			}
+		}
 	}
 	outputFile.close();
 }
@@ -133,7 +260,7 @@ void writePWM( const Config *config,
 // Write a MEME-format motif
 void writeMEME( const Config *config,
 		const Dataset *dataset,
-		const vector<uint32_t> &count ) {
+		const vector<OutputMotif> &outputMotifs ) {
 	string filename = config->outputPrefix + ".meme";
 	ofstream outputFile(filename);
 	if ( outputFile.is_open() == false ) {
@@ -150,23 +277,28 @@ void writeMEME( const Config *config,
 		if ( symbol + 1 < dataset->alphabetSize ) outputFile << " ";
 	}
 	outputFile << "\n\n";
-	outputFile << "MOTIF MorbiusPlus\n";
-	outputFile << "letter-probability matrix: alength= " << dataset->alphabetSize
-		   << " w= " << config->motifLength
-		   << " nsites= " << dataset->sequences.size()
-		   << " E= 0\n";
-
 	double denominator = (double)dataset->sequences.size() +
 			     (double)dataset->alphabetSize * PSEUDOCOUNT;
-	for ( size_t column = 0; column < config->motifLength; column ++ ) {
-		for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
-			double probability =
-				((double)count[(size_t)symbol * config->motifLength + column] + PSEUDOCOUNT) /
-				denominator;
-			outputFile << probability;
-			if ( symbol + 1 < dataset->alphabetSize ) outputFile << " ";
+	for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+		if ( config->outputMotifNum == 1 ) outputFile << "MOTIF MorbiusPlus\n";
+		else outputFile << "MOTIF MorbiusPlus_" << motifIdx + 1 << "\n";
+		outputFile << "letter-probability matrix: alength= " << dataset->alphabetSize
+			   << " w= " << config->motifLength
+			   << " nsites= " << dataset->sequences.size()
+			   << " E= 0\n";
+
+		const vector<uint32_t> &count = outputMotifs[motifIdx].count;
+		for ( size_t column = 0; column < config->motifLength; column ++ ) {
+			for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
+				double probability =
+					((double)count[(size_t)symbol * config->motifLength + column] + PSEUDOCOUNT) /
+					denominator;
+				outputFile << probability;
+				if ( symbol + 1 < dataset->alphabetSize ) outputFile << " ";
+			}
+			outputFile << "\n";
 		}
-		outputFile << "\n";
+		if ( motifIdx + 1 < outputMotifs.size() ) outputFile << "\n";
 	}
 	outputFile.close();
 }
@@ -176,8 +308,7 @@ void writeSummary( const Config *config,
 		   const Dataset *dataset,
 		   const SeedModel *seedModel,
 		   const vector<PipelineResult> &pipelineResults,
-		   int bestPipelineIdx,
-		   const string &consensus,
+		   const vector<OutputMotif> &outputMotifs,
 		   double elapsedTime ) {
 	string filename = config->outputPrefix + ".summary.txt";
 	ofstream outputFile(filename);
@@ -186,7 +317,6 @@ void writeSummary( const Config *config,
 		exit(1);
 	}
 
-	const PipelineResult &bestResult = pipelineResults[bestPipelineIdx];
 	outputFile << "Input File              : " << config->inputFilename << "\n";
 	outputFile << "Alphabet                : " << (config->alphabetMode == ALPHABET_DNA ? "DNA" : "Protein") << "\n";
 	outputFile << "Sequence Number          : " << dataset->sequences.size() << "\n";
@@ -203,14 +333,36 @@ void writeSummary( const Config *config,
 		outputFile << "Anchor Rank              : " << seedModel->anchorRank << "\n";
 	}
 	outputFile << "Pipeline Number          : " << NUMPIPELINE << "\n";
-	outputFile << "Selected Pipeline        : " << bestPipelineIdx << "\n";
-	outputFile << "Best Score               : " << bestResult.bestScore << "\n";
-	outputFile << "Normalized Best Score    : "
-		   << calculateNormalizedScore(config, dataset, bestResult.bestScore) << "\n";
-	outputFile << "Score Threshold          : " << config->scoreThreshold << "\n";
-	outputFile << "Pipeline Update Number   : " << bestResult.updateNum << "\n";
-	outputFile << "Threshold Reached        : " << (bestResult.thresholdReached ? "Yes" : "No") << "\n";
-	outputFile << "Consensus Subsequence    : " << consensus << "\n";
+	if ( config->outputMotifNum == 1 ) {
+		const OutputMotif &outputMotif = outputMotifs[0];
+		const PipelineResult &bestResult = pipelineResults[outputMotif.pipelineIdx];
+		outputFile << "Selected Pipeline        : " << outputMotif.pipelineIdx << "\n";
+		outputFile << "Best Score               : " << bestResult.bestScore << "\n";
+		outputFile << "Normalized Best Score    : "
+			   << calculateNormalizedScore(config, dataset, bestResult.bestScore) << "\n";
+		outputFile << "Score Threshold          : " << config->scoreThreshold << "\n";
+		outputFile << "Pipeline Update Number   : " << bestResult.updateNum << "\n";
+		outputFile << "Threshold Reached        : " << (bestResult.thresholdReached ? "Yes" : "No") << "\n";
+		outputFile << "Consensus Subsequence    : " << outputMotif.consensus << "\n";
+	} else {
+		outputFile << "Score Threshold          : " << config->scoreThreshold << "\n";
+		outputFile << "Requested Motif Number   : " << config->outputMotifNum << "\n";
+		outputFile << "Reported Motif Number    : " << outputMotifs.size() << "\n";
+		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			const OutputMotif &outputMotif = outputMotifs[motifIdx];
+			const PipelineResult &pipelineResult = pipelineResults[outputMotif.pipelineIdx];
+			outputFile << "\n[Motif " << motifIdx + 1 << "]\n";
+			outputFile << "Motif ID                 : MorbiusPlus_" << motifIdx + 1 << "\n";
+			outputFile << "Selected Pipeline        : " << outputMotif.pipelineIdx << "\n";
+			outputFile << "Best Score               : " << pipelineResult.bestScore << "\n";
+			outputFile << "Normalized Best Score    : "
+				   << calculateNormalizedScore(config, dataset, pipelineResult.bestScore) << "\n";
+			outputFile << "Pipeline Update Number   : " << pipelineResult.updateNum << "\n";
+			outputFile << "Threshold Reached        : "
+				   << (pipelineResult.thresholdReached ? "Yes" : "No") << "\n";
+			outputFile << "Consensus Subsequence    : " << outputMotif.consensus << "\n";
+		}
+	}
 	outputFile << "Elapsed Time             : " << elapsedTime << " seconds\n";
 	outputFile.close();
 }
@@ -220,10 +372,8 @@ void printResult( const Config *config,
 		  const Dataset *dataset,
 		  const SeedModel *seedModel,
 		  const vector<PipelineResult> &pipelineResults,
-		  int bestPipelineIdx,
-		  const string &consensus,
+		  const vector<OutputMotif> &outputMotifs,
 		  double elapsedTime ) {
-	const PipelineResult &bestResult = pipelineResults[bestPipelineIdx];
 	printf( "---------------------------------------------------------------------\n" );
 	printf( "MORBIUS+ RESULT\n" );
 	printf( "---------------------------------------------------------------------\n" );
@@ -237,12 +387,30 @@ void printResult( const Config *config,
 	} else {
 		printf( "Selected Seed          : None\n" );
 	}
-	printf( "Selected Pipeline      : %d\n", bestPipelineIdx );
-	printf( "Best Score             : %lu\n", (unsigned long)bestResult.bestScore );
-	printf( "Normalized Best Score  : %.8f\n",
-		calculateNormalizedScore(config, dataset, bestResult.bestScore) );
-	printf( "Pipeline Updates       : %lu\n", (unsigned long)bestResult.updateNum );
-	printf( "Consensus Subsequence  : %s\n", consensus.c_str() );
+	if ( config->outputMotifNum == 1 ) {
+		const OutputMotif &outputMotif = outputMotifs[0];
+		const PipelineResult &bestResult = pipelineResults[outputMotif.pipelineIdx];
+		printf( "Selected Pipeline      : %d\n", outputMotif.pipelineIdx );
+		printf( "Best Score             : %lu\n", (unsigned long)bestResult.bestScore );
+		printf( "Normalized Best Score  : %.8f\n",
+			calculateNormalizedScore(config, dataset, bestResult.bestScore) );
+		printf( "Pipeline Updates       : %lu\n", (unsigned long)bestResult.updateNum );
+		printf( "Consensus Subsequence  : %s\n", outputMotif.consensus.c_str() );
+	} else {
+		printf( "Requested Motifs       : %lu\n", (unsigned long)config->outputMotifNum );
+		printf( "Reported Motifs        : %lu\n", (unsigned long)outputMotifs.size() );
+		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			const OutputMotif &outputMotif = outputMotifs[motifIdx];
+			const PipelineResult &pipelineResult = pipelineResults[outputMotif.pipelineIdx];
+			printf( "[Motif %lu]\n", (unsigned long)motifIdx + 1 );
+			printf( "Selected Pipeline      : %d\n", outputMotif.pipelineIdx );
+			printf( "Best Score             : %lu\n", (unsigned long)pipelineResult.bestScore );
+			printf( "Normalized Best Score  : %.8f\n",
+				calculateNormalizedScore(config, dataset, pipelineResult.bestScore) );
+			printf( "Pipeline Updates       : %lu\n", (unsigned long)pipelineResult.updateNum );
+			printf( "Consensus Subsequence  : %s\n", outputMotif.consensus.c_str() );
+		}
+	}
 	printf( "Elapsed Time           : %.8f\n", elapsedTime );
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );

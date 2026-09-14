@@ -65,29 +65,33 @@ int main( int argc, char **argv ) {
 
 	//--------------------------------------------------------------------------------------------
 	// [STEP 4]
-	// Select the best pipeline and store the result
+	// Select unique output motifs and store the results
 	//--------------------------------------------------------------------------------------------
-	printf( "[STEP 4] Selecting and storing the best result is started!\n" );
+	if ( config.outputMotifNum == 1 ) {
+		printf( "[STEP 4] Selecting and storing the best result is started!\n" );
+	} else {
+		printf( "[STEP 4] Selecting and storing output motifs is started!\n" );
+	}
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
-	int bestPipelineIdx = selectBestPipeline(pipelineResults);
-	const vector<uint32_t> &bestOffsets = pipelineResults[bestPipelineIdx].bestOffsets;
-	vector<uint32_t> resultCount;
-	buildResultCount(&config, &dataset, bestOffsets, resultCount);
-	string consensus = buildConsensus(&config, &dataset, resultCount);
+	vector<OutputMotif> outputMotifs;
+	selectOutputMotifs(&config, &dataset, pipelineResults, outputMotifs);
 	createOutputDirectory(config.outputPrefix);
-	writeMotifFASTA(&config, &dataset, bestOffsets);
-	writeOffsets(&config, &dataset, bestOffsets);
-	writePWM(&config, &dataset, resultCount);
-	writeMEME(&config, &dataset, resultCount);
+	writeMotifFASTA(&config, &dataset, pipelineResults, outputMotifs);
+	writeOffsets(&config, &dataset, pipelineResults, outputMotifs);
+	writePWM(&config, &dataset, outputMotifs);
+	writeMEME(&config, &dataset, outputMotifs);
 	writeSummary(&config,
 		     &dataset,
 		     &seedModel,
 		     pipelineResults,
-		     bestPipelineIdx,
-		     consensus,
+		     outputMotifs,
 		     seedElapsedTime + processElapsedTime);
-	printf( "[STEP 4] Selecting and storing the best result is done!\n" );
+	if ( config.outputMotifNum == 1 ) {
+		printf( "[STEP 4] Selecting and storing the best result is done!\n" );
+	} else {
+		printf( "[STEP 4] Selecting and storing output motifs is done!\n" );
+	}
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
 
@@ -95,8 +99,7 @@ int main( int argc, char **argv ) {
 		    &dataset,
 		    &seedModel,
 		    pipelineResults,
-		    bestPipelineIdx,
-		    consensus,
+		    outputMotifs,
 		    seedElapsedTime + processElapsedTime);
 
 	return 0;
