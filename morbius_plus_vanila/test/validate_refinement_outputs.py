@@ -77,7 +77,7 @@ def site_score(site, matrix, bg):
 def best_site(sequence, matrix, bg):
     width = len(matrix)
     best = (-math.inf, 0, "+")
-    for strand in ("+", "-"):
+    for strand in ("+",):
         for offset in range(len(sequence) - width + 1):
             site = sequence[offset:offset + width]
             if strand == "-":
@@ -128,6 +128,7 @@ def check_outputs(prefix, primary, control, expected_limit):
     scoring = meme(prefix + ".refinement_scoring.meme")
     for suffix in (".meme", ".refinement_candidates.meme", ".refinement_scoring.meme"):
         text = Path(prefix + suffix).read_text()
+        assert "strands: +\n" in text
         frequencies = re.search(r"Background letter frequencies[^\n]*\n([^\n]+)", text).group(1).split()
         assert dict(zip(frequencies[::2], map(float, frequencies[1::2]))) == dict.fromkeys(ALPHABET, 0.25)
     bg = background([sequence for _, sequence in control])
@@ -160,7 +161,7 @@ def check_outputs(prefix, primary, control, expected_limit):
                 continue
             assert site["SitePresent"] == "1"
             offset, strand = int(site["Offset"]), site["Strand"]
-            assert strand in {"+", "-"} and 0 <= offset <= len(primary[index][1]) - width
+            assert strand == "+" and 0 <= offset <= len(primary[index][1]) - width
             sequence = primary[index][1][offset:offset + width]
             if strand == "-":
                 sequence = reverse_complement(sequence)

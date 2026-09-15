@@ -87,39 +87,38 @@ static uint64_t agreement( const vector<uint32_t> &bpm, size_t width ) {
 	return score;
 }
 
-static void checkJointSampling( void ) {
+static void checkForwardSampling( void ) {
 	Config config = testConfig(1);
 	Dataset dataset = testDataset({"AC"});
-	vector<double> lpm = {0.0, 1.0, 2.0, 3.0};
+	// Reverse windows have much higher weights and must still never be sampled.
+	vector<double> lpm = {0.0, 1.0, 20.0, 30.0};
 	RandomGenerator random;
 	initializeRandomGenerator(&random, 1947);
 	const size_t sampleNum = 60000;
-	vector<size_t> counts(4, 0);
+	vector<size_t> counts(2, 0);
 	for ( size_t trial = 0; trial < sampleNum; trial ++ ) {
 		CandidateSite site = sampleCandidate(&config, &dataset, "AC", lpm, &random);
-		require(site.offset < 2 && site.strand <= STRAND_REVERSE, "joint sample out of bounds");
-		counts[(size_t)site.strand * 2 + site.offset] ++;
+		require(site.offset < 2 && site.strand == STRAND_FORWARD, "sample is not a valid forward candidate");
+		counts[site.offset] ++;
 	}
-	// Integer log2 values give exact PWL weights. Both orientation totals belong
-	// to the same normalization: forward 3/15, reverse 12/15, not one half each.
-	const double expected[] = {1.0 / 15, 2.0 / 15, 8.0 / 15, 4.0 / 15};
+	const double expected[] = {1.0 / 3, 2.0 / 3};
 	for ( size_t idx = 0; idx < counts.size(); idx ++ ) {
 		require(abs((double)counts[idx] / sampleNum - expected[idx]) < 0.01,
-			"offset/strand probabilities are not jointly normalized");
+			"forward candidate probabilities include reverse-complement mass");
 	}
 
-	// Put the orientations in separate CDF segments, with unequal total mass.
-	string sequence(32, 'A');
+	// Exercise multiple CDF segments and unequal mass across the boundary.
+	string sequence = string(32, 'A') + string(33, 'C');
 	dataset = testDataset({sequence});
-	size_t reverseNum = 0;
+	size_t firstSegmentNum = 0;
 	for ( size_t trial = 0; trial < sampleNum; trial ++ ) {
 		CandidateSite site = sampleCandidate(&config, &dataset, sequence, lpm, &random);
-		require(site.offset < sequence.size() && site.strand <= STRAND_REVERSE,
-			"segmented sample out of bounds");
-		if ( site.strand == STRAND_REVERSE ) reverseNum ++;
+		require(site.offset < sequence.size() && site.strand == STRAND_FORWARD,
+			"segmented sampler returned a reverse or invalid candidate");
+		if ( site.offset < 32 ) firstSegmentNum ++;
 	}
-	require(abs((double)reverseNum / sampleNum - 8.0 / 9) < 0.01,
-		"separate segments lost the joint orientation mass");
+	require(abs((double)firstSegmentNum / sampleNum - 32.0 / 98) < 0.01,
+		"segmented sampling lost the forward candidate mass");
 }
 
 static void checkOrientedCounts( void ) {
@@ -161,7 +160,6 @@ static void checkIncrementalUpdates( const vector<string> &sequences, size_t wid
 	uint64_t bestScore = agreement(reconstructBPM(config, dataset, offsets, strands), width);
 	RandomGenerator random;
 	initializeRandomGenerator(&random, config.randomSeed ^ 0xd2b74407b1ce6e93ULL);
-	size_t reverseSamples = 0;
 	for ( uint64_t updateIdx = 0; updateIdx < config.maxUpdateNum; updateIdx ++ ) {
 		size_t seqIdx = updateIdx % sequences.size();
 		vector<uint32_t> bpm = reconstructBPM(config, dataset, offsets, strands);
@@ -174,7 +172,7 @@ static void checkIncrementalUpdates( const vector<string> &sequences, size_t wid
 		CandidateSite site = sampleCandidate(&config, &dataset, sequences[seqIdx], lpm, &random);
 		offsets[seqIdx] = site.offset;
 		strands[seqIdx] = site.strand;
-		if ( site.strand == STRAND_REVERSE ) reverseSamples ++;
+		require(site.strand == STRAND_FORWARD, "update replay sampled a reverse site");
 		uint64_t score = agreement(reconstructBPM(config, dataset, offsets, strands), width);
 		if ( score > bestScore ) {
 			bestScore = score;
@@ -182,11 +180,10 @@ static void checkIncrementalUpdates( const vector<string> &sequences, size_t wid
 			expectedStrands = strands;
 		}
 	}
-	require(reverseSamples > 0, "replay fixture did not sample reverse sites");
+	require(expectedStrands == vector<uint8_t>(sequences.size(), STRAND_FORWARD),
+		"best state contains a reverse site");
 	if ( sequences.size() > 1 ) {
-		require(find(expectedStrands.begin(), expectedStrands.end(), STRAND_REVERSE) != expectedStrands.end(),
-			"replay fixture has no reverse site in its best state");
-		require(expectedStrands != strands, "replay fixture must distinguish best from final strands");
+		require(expectedOffsets != offsets, "replay fixture must distinguish best from final offsets");
 	}
 	PipelineResult result;
 	// An unreachable threshold forces removal/addition across every update,
@@ -204,10 +201,10 @@ static void checkIncrementalUpdates( const vector<string> &sequences, size_t wid
 }
 
 int main( void ) {
-	checkJointSampling();
+	checkForwardSampling();
 	checkOrientedCounts();
 	checkIncrementalUpdates({"AACGATT", "CCATGCT", "GCTTTAG", "TGGCAAC", "TTAGCAA"}, 5);
 	checkIncrementalUpdates({"ACGCAA"}, 6);
-	cout << "All strand sampling and state tests passed.\n";
+	cout << "All forward sampling, oriented helper, and state tests passed.\n";
 	return 0;
 }

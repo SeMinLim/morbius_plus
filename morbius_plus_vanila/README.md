@@ -1,6 +1,6 @@
 # Morbius_Plus_Vanila
 
-`Morbius_Plus_Vanila` is the pure C++ implementation of Morbius+. It supports both-strand DNA motif discovery and protein motif discovery without FPGA hardware.
+`Morbius_Plus_Vanila` is the pure C++ implementation of Morbius+. It supports forward-strand DNA motif discovery and protein motif discovery without FPGA hardware.
 
 ## Implemented Morbius+ Components
 
@@ -12,7 +12,7 @@
 - Persistent Base-Pair Matrix (BPM) with pseudocount 1
 - Log Probability Matrix (LPM)
 - Log-domain candidate probability calculation
-- Joint sampling of DNA `(offset, strand)` candidates
+- Sampling of forward-strand DNA offsets
 - Segment-based hierarchical inverse-CDF sampling
 - xoshiro128+ random generation
 - Overall Consensus Agreement Score
@@ -24,9 +24,9 @@ Sequence-level seed support and Markov statistics are computed once. The origina
 
 Every pipeline receives the same seed word and anchor, while its original pipeline-specific RNG still chooses its initial offsets and subsequent Gibbs samples. Initial offset arrays and final PWMs may therefore differ; sharing a seed does not clone a pipeline's random state or offsets.
 
-For DNA, each Gibbs update evaluates the forward and reverse-complement window at every legal offset and samples one site from their joint probability distribution. Each original sequence still contributes exactly one site to the BPM. The selected strand is applied when adding and removing sites and is saved with the offsets in each pipeline's best state. Final site sequences and PWM counts use these selected orientations. Protein discovery remains forward-only.
+For DNA, each Gibbs update evaluates the forward window at every legal offset and samples one site from their probability distribution. Each original sequence still contributes exactly one site to the BPM. Best states retain offsets and strand fields, with every selected strand set to forward. Final site sequences and PWM counts use the original input orientation. Protein discovery also uses forward windows.
 
-Seed-ranking and anchor-scoring formulas are unchanged; the highest-ranked seed and its anchor are shared again. The offset-initialization algorithm is unchanged and uses that shared model with each pipeline's own RNG. All initial DNA strands are forward, without drawing additional random numbers. The guidance rate, per-pipeline random-seed derivation, motif length, pipeline count, update limit, threshold and termination rules, and output ranking/deduplication are unchanged. DNA candidate counts increase from `L-W+1` to `2(L-W+1)` for sequence length `L` and motif length `W`; evaluating the extra candidates increases computation, so elapsed-time effects require measurement.
+Seed-ranking and anchor-scoring formulas are unchanged; the highest-ranked seed and its anchor are shared. The offset-initialization algorithm uses that shared model with each pipeline's own RNG. All initial DNA strands are forward, without drawing additional random numbers. The guidance rate, per-pipeline random-seed derivation, motif length, pipeline count, update limit, threshold and termination rules, and output ranking/deduplication are unchanged. Each sequence has `L-W+1` candidate windows for sequence length `L` and motif length `W`.
 
 ## Build
 
@@ -77,7 +77,7 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 This is a separate, STREME-inspired refinement of the completed Gibbs candidates.
 It does not add an absent-site state to the Gibbs sampler. Enabling refinement
 does not change the shared seed and anchor, initial offsets, per-pipeline RNG
-streams, joint strand sampling, agreement score or termination rules. The default Gibbs agreement threshold is
+streams, forward-only sampling, agreement score or termination rules. The default Gibbs agreement threshold is
 still **0.80**. Without `--control`, the existing DNA and protein behavior is
 preserved. Control-based refinement currently requires DNA and the same fixed
 sequence length in Primary and Control; their sequence counts may differ.
@@ -89,9 +89,9 @@ ranking, deduplication or the `--motif-count` limit:
    it across candidates. Tuple counts include both orientations; the prior for
    each length-`k` tuple is `1 / 4^k`. A window uses only its own preceding bases
    as context, with order 0 and 1 at its first two positions.
-2. Scan every Primary and Control sequence on both strands for its best
-   `log2(P(window | PWM) / P(window | background))` site. Ties prefer the forward
-   strand, then the lowest original offset. Each original sequence contributes
+2. Scan every Primary and Control sequence on the forward strand for its best
+   `log2(P(window | PWM) / P(window | background))` site. Ties prefer the lowest
+   original offset. Each original sequence contributes
    at most one hit to the enrichment table.
 3. Search positive site-score cutoffs, admitting all Primary and Control scores
    tied at a cutoff together. A passing site has `score >= cutoff`. Among
@@ -112,11 +112,11 @@ unprocessed candidate when ready, but results remain in pipeline-index order.
 Gibbs sampling finishes before refinement workers start.
 
 Before processing candidates, the program caches each Primary and Control
-window's background log-probability on both strands and builds the Fisher
+forward window's background log-probability and builds the Fisher
 log-factorial table once. All candidates and iterations share these read-only
 tables. Background scores remain `double`, Fisher arithmetic remains
 `long double`, and the original accumulation and score-tie rules are unchanged.
-The background cache uses two doubles per legal offset across Primary and
+The background cache uses one double per legal offset across Primary and
 Control, plus sequence-start indices; it is allocated once, not per worker.
 Cache construction is included in the existing refinement timer.
 
@@ -161,7 +161,11 @@ to describe Gibbs alone.
 All MEME exports retain the same uniform letter-frequency header as the existing
 evaluation output, so default Tomtom scoring uses the same convention for a motif
 in `.meme` and `.refinement_candidates.meme`. Refinement itself uses the full
-Control Markov model recorded in `.refinement_background.tsv`.
+Control Markov model recorded in `.refinement_background.tsv`. Its tuple counts
+still include reverse complements to retain the same background model; Gibbs
+and refinement candidate searches use only forward windows. DNA MEME headers
+declare `strands: +`; Tomtom's default target reverse-complement comparison is
+unchanged.
 
 The method follows the sequence-level enrichment principle of
 [STREME refinement](https://meme-suite.org/meme/doc/streme.html), while retaining
@@ -187,9 +191,9 @@ For output prefix `result/morbius_plus`, the program generates:
 
 With `--motif-count 1`, the MEME ID is `MorbiusPlus`. For larger values, candidates already produced by the 16 pipelines are ranked by score and exact duplicate PWMs are removed. The combined files identify motifs by 1-based rank, and the MEME IDs are `MorbiusPlus_1`, `MorbiusPlus_2`, and so on. If fewer unique candidates are available than requested, only the available motifs are written and the requested and reported counts are recorded in the summary.
 
-DNA FASTA headers include `strand=+` or `strand=-`, and DNA `offsets.tsv` includes a `Strand` column after `Offset`. Both report the zero-based leftmost coordinate of the window in the original input sequence, even for reverse-complement sites. FASTA sequences and the `Motif` column are oriented to the selected strand. DNA MEME files declare `strands: + -`; PWM and MEME matrices count each original sequence once. Protein site and matrix output formats are unchanged.
+DNA FASTA headers include `strand=+`, and DNA `offsets.tsv` includes a `Strand` column after `Offset`, always `+`. Both report the zero-based leftmost coordinate of the window in the original input sequence. FASTA sequences and the `Motif` column retain the input orientation. DNA MEME files declare `strands: +`; each original sequence contributes at most one site to a reported PWM. Protein site and matrix output formats are unchanged.
 
-The DNA summary includes an `[All Pipelines]` table with each pipeline's best score, update count, threshold-reached flag, and termination reason (`threshold` or `max_updates`), including pipelines excluded from the final motif output. If the threshold is reached on the final allowed update, the reason is `threshold`. The summary also records the joint strand search, all-forward initial strands, original offset coordinates, and configured update limit.
+The DNA summary includes an `[All Pipelines]` table with each pipeline's best score, update count, threshold-reached flag, and termination reason (`threshold` or `max_updates`), including pipelines excluded from the final motif output. If the threshold is reached on the final allowed update, the reason is `threshold`. The summary also records the forward-only search, all-forward initial strands, original offset coordinates, and configured update limit.
 
 The seed fields in the summary and console describe the first reported motif's pipeline, identified by `Seed Pipeline`. The `seeds.tsv` file records all 16 assignments, support/rank values, and anchors; `SeedValid=No` indicates random-only initialization and `NA` indicates an unavailable seed or anchor. The `initial_offsets.tsv` file records the actual offset arrays captured before the first Gibbs update, with one sequence per row and one pipeline per column. Pipeline indices, sequence indices, and offsets are zero-based. These diagnostics include all pipelines regardless of the requested motif count and allow offset-array equality to be checked without enforcing diversity or drawing additional random numbers. Capturing these arrays adds one offset copy per pipeline and diagnostic output I/O.
 

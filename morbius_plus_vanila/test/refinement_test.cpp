@@ -137,13 +137,14 @@ static double manualBackgroundScore( const string &site, const vector<vector<dou
 static RefinementSite manualBestSite( const string &sequence, size_t width,
 		const vector<double> &pwm, const vector<vector<double>> &background ) {
 	RefinementSite best = {-numeric_limits<double>::infinity(), 0, STRAND_FORWARD};
-	for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_REVERSE; strand ++ ) {
+	for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_FORWARD; strand ++ ) {
 		for ( size_t offset = 0; offset + width <= sequence.size(); offset ++ ) {
 			string site = siteString(sequence, offset, strand, width);
-			double score = -manualBackgroundScore(site, background);
+			double score = 0.0;
 			for ( size_t column = 0; column < width; column ++ ) {
 				score += log2(pwm[string("ACGT").find(site[column]) * width + column]);
 			}
+			score -= manualBackgroundScore(site, background);
 			if ( score > best.score ) best = {score, (uint32_t)offset, strand};
 		}
 	}
@@ -186,7 +187,7 @@ static void checkBackgroundAndStrands( void ) {
 			"best-site orientation and original-coordinate offset");
 	}
 	require(scanned[0].offset == 2 && scanned[0].strand == STRAND_FORWARD &&
-		scanned[1].offset == 3 && scanned[1].strand == STRAND_REVERSE, "planted forward and reverse sites");
+		scanned[1].strand == STRAND_FORWARD, "reverse-only planted site must not be selected");
 	RefinementBackground uniform;
 	for ( size_t order = 0; order < 3; order ++ ) uniform.logProbability.push_back(vector<double>((size_t)pow(4.0, order + 1), -2.0));
 	scanRefinementSites(&config, &dataset, &uniform, vector<double>(16, 0.25), scanned);
@@ -194,60 +195,69 @@ static void checkBackgroundAndStrands( void ) {
 		"equal site scores must choose forward, lowest offset");
 }
 
+static void checkReverseOnlySiteExcluded( void ) {
+	Config config = testConfig(4);
+	Dataset dataset = testDataset({"TCGT", "ACGA"});
+	RefinementBackground background;
+	for ( size_t order = 0; order < 3; order ++ ) {
+		background.logProbability.push_back(vector<double>((size_t)1 << (2 * (order + 1)), -2.0));
+	}
+	vector<double> pwm(16, 0.01);
+	const string motif = "ACGA";
+	for ( size_t column = 0; column < 4; column ++ ) {
+		pwm[dataset.alphabet.find(motif[column]) * 4 + column] = 0.97;
+	}
+	vector<RefinementSite> sites;
+	scanRefinementSites(&config, &dataset, &background, pwm, sites);
+	for ( size_t seqIdx = 0; seqIdx < sites.size(); seqIdx ++ ) {
+		double expected = 0.0;
+		for ( size_t column = 0; column < 4; column ++ ) {
+			expected += log2(pwm[dataset.alphabet.find(dataset.sequences[seqIdx][column]) * 4 + column]);
+		}
+		expected += 8.0;
+		require(sites[seqIdx].strand == STRAND_FORWARD && sites[seqIdx].offset == 0,
+			"refinement selected the forbidden reverse-complement site");
+		closeTo(sites[seqIdx].score, expected, "independently scored forward-only site");
+	}
+	require(sites[1].score > sites[0].score + 10.0,
+		"fixture must distinguish the forward motif from a high-scoring reverse complement");
+}
+
+static uint32_t fixtureWord( uint64_t *state ) {
+	*state = *state * 6364136223846793005ULL + 1442695040888963407ULL;
+	return (uint32_t)(*state >> 32);
+}
+
+static string fixtureSequence( uint64_t *state ) {
+	string sequence(32, 'A');
+	for ( char &base : sequence ) base = string("ACGT")[fixtureWord(state) % 4];
+	return sequence;
+}
+
 static void checkSubsetRefinement( void ) {
 	Config config = testConfig(8);
-	// A fixed mixed-strand fixture whose second accepted scan re-admits four
-	// sequences omitted by the first threshold. No Gibbs run is needed here.
-	vector<string> primarySequences = {
-		"ATAATACGATCGAAGCGCAAACTCGTAGCCAA", "CCGGATTCGATCGTACCCATAAGGGTCAGGAA",
-		"CCTCTTCACGATCGATAGTCTGAGAGCGCGTA", "GATAAGGGTCGATCGTGCGTCCCCCGGTTTAG",
-		"GTCTCGTCAACGATCGAGTCGTTCTCTTTTAA", "TTAGCGAGGATCGATCGTGAGTAAACGTAAAT",
-		"TCCTTCTATCGACGATCGACTTCGCGGTGCTG", "GATTGATTATAGTCGATCGTCACTCATCGAAG",
-		"TCAGGAGGGATTAACGATCGACGGGGTCCGGA", "TACCCATCACGGGTTCGATCGTTACTATCAAA",
-		"GTCGGAGTAAAGACGACGATCGAACTGCTAAG", "AGCCATCGATCGTTCGCCGTTGTAGGCCCGGG",
-		"TCCAAGACGATCGAGGGGCTAACCAGACGAGT", "CCGGGTGTCGATCGTTTCATCACAATTTCATG",
-		"ACGCCGAAACGATCGACAAAATAAATGAACCC", "CAGCGAAAATCGATCGTCGCCATGTATTCAAT",
-		"GGTTTTAAGCGATATTATGCTGATGTACAATA", "ACGCCCATCGTTGCCTCTTCTCTCGAGATTAT",
-		"TTAATAACCCAGTCGCAAGGGACCTAATTTTC", "CCGGTGTTAACCATGATTGCCCTTGAGAGGCC",
-		"AACTGCTATTACGCCGACTTATGGCGGTATTA", "GACAGATGCATACAAGTATATGGAACGTACGC",
-		"GAAAAAAGAACTATAAGCGGATTAGGCAACGG", "ACACCCACCGAAGGCACCACCACCCAGACCTC",
-		"ATGACACCACAAACCATCAGCCCACCCAGACT", "TACTGAACATATTACCGCAGTCGGTGCGATTA",
-		"CGTGATATCTTTCTCACAATGGACGACCTCGA", "TGAATCCAGTCAAGCAGTGGAGATCAGCGGTA",
-		"AGGAGAAAAAACGGTTGCTGCCCACCTACCGA", "GCGTGTTGACTGACATCAGGAACGTATCTAGA",
-		"CGCGTGTTTCTGATTAACTCTCTTAGTCAATT", "CATGATAGCCTCACTGATACCGGACGGTGGAG",
-		"TTTGATTACCATGAAACCATCGCATGAAGGCA", "TCGCGCACGTCCACCGGGATTTGGTACCCCCT",
-		"TTCTAGGCAGGCACATCGCCAGGTGATTAGTT", "TATGAATCTATTGTCTTCTACGGTATTTATGA"
-	};
-	vector<string> controlSequences = {
-		"TCTTGAGTCGGTAACCTCTCTCTCGCTCTATC", "GCATAGCCGCACTAAGTGATCCCTAAAAGGGA",
-		"GAACGCGGGTAATACACAGCGGTCACCCGCGG", "AACTTAAAAAAAATAGACCCGCTCCGCATAGC",
-		"AATAGAACGTCACTAGCCGACACGTCAACTAA", "ATCCTCGAATCGAGCCACATGGGAGGTGGGTG",
-		"CCGTTGATGGATTAATTCTCAGTCGTGAAGTT", "CAATTTAGTAAGTCATATCCATGAAAGCCTTA",
-		"AGGGACTCCCCTCTAAAGGTTTTCAATCCACT", "GATGACTTATGGGGTAGCGAGAAAAAAGTCGT",
-		"CCGTATAGCTGACTGCGTCAAGTTGCTCAGCA", "CCGGTCAGGACGTACAAGTTCAATGAATCTGA",
-		"GGGCCATGATCCGTAGGGCGCTAACTGGACAC", "GTTCGTCCTGCTGTACGTAGAGCCTCCGGACG",
-		"AGGCACGCGGCGCGCACTAACGGCGTCTTTGC", "GCAGCCAGCTATCACTCGCTAACCATGCGATA",
-		"GGAGCGCGCGACAGGAGTAGTGCGTACCTTCG", "ACAAAACGATTGCGATTCAACAGTAAGGCACT",
-		"GGTAGCGAACTGGTACTACGGCCACCTCCAGG", "AGCTTGGGCTGTTATAGACATGGACCCATGTA",
-		"CATGTTCGTTGTGATACGTTAGAGGGTACGAT", "TGTATTCACCCTTGTAGGTGAGAGAGTGGTCA",
-		"CCCTTGCAAAGTCCGAACTGTGGTTTAACTAG", "GGTGTACGCCGCTACAAGCATCTATTCCTAGA",
-		"GATCTGCTGCTACTACATGCTTCTATCTGGGG", "GGTACGGTTCTAGCACGCTTGCTAAAGGGCTT",
-		"AGCCTAAATGCTATCGGGACCTCTCACTTGTG", "CCTGTCTGTGCCAATGCAATATGGCGATTATG",
-		"TTTCAGCTCGTCAGTCGACTCGCCTTCACAAT", "TCTACTACACAAGTGGAGAAGCGAGATTGTAT",
-		"CCCTATACATCCCTTGACGAAGGGCACCCACT", "AATCCTTCGATAATTTATCGGTTAGGAGGTGC",
-		"GACCATCCTCAGAGCGGAGTTGCATGCCCAGT", "CAGGGTTCCCTGGGGGTCAATAAAGTATTTCG",
-		"AGACGACGAAGGAAGACGGAAGCCGCTAAATG", "CGGAGGCTAGCAAGATGGAAACCGTCTCATGT"
-	};
+	// A fixed forward-only fixture accepts three proposals and re-admits eight
+	// sequences omitted by the initial threshold. No Gibbs run is needed here.
+	uint64_t state = 13;
+	vector<string> primarySequences, controlSequences;
+	for ( size_t seqIdx = 0; seqIdx < 36; seqIdx ++ ) {
+		primarySequences.push_back(fixtureSequence(&state));
+		controlSequences.push_back(fixtureSequence(&state));
+	}
+	OutputMotif initial{};
+	initial.pipelineIdx = 12;
+	initial.siteNum = primarySequences.size();
+	initial.sitePresent.assign(initial.siteNum, 1);
+	initial.strands.assign(initial.siteNum, STRAND_FORWARD);
+	for ( size_t seqIdx = 0; seqIdx < initial.siteNum; seqIdx ++ ) {
+		uint32_t offset = fixtureWord(&state) % 25;
+		initial.offsets.push_back(offset);
+		if ( seqIdx < 16 ) primarySequences[seqIdx].replace(offset, 8, "ACGATCGA");
+	}
 	Dataset primary = testDataset(primarySequences), control = testDataset(controlSequences);
 	RefinementBackground background;
 	buildRefinementBackground(&control, &background);
 	vector<vector<double>> expectedBackground = manualBackground(control);
-	OutputMotif initial{};
-	initial.pipelineIdx = 12;
-	initial.siteNum = primary.sequences.size();
-	initial.sitePresent.assign(initial.siteNum, 1);
-	initial.offsets = {5,6,7,8,9,10,11,12,13,14,15,5,6,7,8,9,8,3,8,12,13,20,5,3,8,20,15,5,24,17,9,23,15,9,23,6};
-	initial.strands = {0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,1,0,1,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,1,1};
 	initial.count.assign(32, 0);
 	for ( size_t idx = 0; idx < initial.siteNum; idx ++ ) {
 		string site = siteString(primary.sequences[idx], initial.offsets[idx], initial.strands[idx], 8);
@@ -256,12 +266,12 @@ static void checkSubsetRefinement( void ) {
 	RefinementResult result;
 	refineMotif(&config, &primary, &control, &background, initial, &result);
 	require(result.selection.valid && result.motif.refined && result.motif.pipelineIdx == 12, "candidate identity and refinement status");
-	require(result.motif.siteNum == 20 && result.fittingSelection.primarySiteNum == 20,
+	require(result.motif.siteNum == 24 && result.fittingSelection.primarySiteNum == 24,
 		"accepted fitting sites must exclude unsupported Primary sequences");
 	require(result.iterations > 0 && result.iterations <= REFINEMENTMAXITERATIONS && result.acceptedIterations > 0,
 		"refinement stops within its separate iteration limit");
 	require(result.acceptedLogPvalues.size() == result.acceptedIterations, "accepted-objective history length");
-	require(result.acceptedIterations == 2 && result.acceptedLogPvalues[0] < result.initialLogPvalue,
+	require(result.acceptedIterations == 3 && result.acceptedLogPvalues[0] < result.initialLogPvalue,
 		"first accepted PWM must improve the evaluated starting PWM");
 	for ( size_t idx = 1; idx < result.acceptedLogPvalues.size(); idx ++ ) {
 		require(result.acceptedLogPvalues[idx] < result.acceptedLogPvalues[idx - 1], "accepted enrichment must strictly improve");
@@ -298,7 +308,7 @@ static void checkSubsetRefinement( void ) {
 	for ( size_t idx = 0; idx < initialPrimary.size(); idx ++ ) {
 		if ( initialPrimary[idx].score < initialSelection.scoreThreshold && result.motif.sitePresent[idx] ) reentered ++;
 	}
-	require(reentered == 4, "previously excluded sequences must be rescanned and allowed to re-enter");
+	require(reentered == 8, "previously excluded sequences must be rescanned and allowed to re-enter");
 	primaryHits = controlHits = 0;
 	for ( const string &sequence : primary.sequences ) {
 		if ( manualBestSite(sequence, 8, finalPWM, expectedBackground).score >= result.selection.scoreThreshold ) primaryHits ++;
@@ -316,7 +326,7 @@ static void checkSubsetRefinement( void ) {
 			columnCount += counts[base * 8 + column];
 			probabilitySum += (counts[base * 8 + column] + 1.0) / (result.motif.siteNum + 4.0);
 		}
-		require(columnCount == 20, "excluded sequences must not contribute a site");
+		require(columnCount == 24, "excluded sequences must not contribute a site");
 		closeTo(probabilitySum, 1.0, "pseudocount normalization uses participating site count");
 	}
 	RefinementResult unsupported;
@@ -353,6 +363,7 @@ static void checkRefinedDeduplication( void ) {
 int main( void ) {
 	checkFisherAndTies();
 	checkBackgroundAndStrands();
+	checkReverseOnlySiteExcluded();
 	checkSubsetRefinement();
 	checkRefinedDeduplication();
 	cout << "All enrichment, Markov, strand, and subset-refinement tests passed.\n";

@@ -1,4 +1,4 @@
-"""Reconstruct emitted DNA matrices from original-coordinate, oriented sites."""
+"""Reconstruct emitted DNA matrices from original-coordinate, forward sites."""
 import csv
 import io
 from pathlib import Path
@@ -31,7 +31,7 @@ for row, (header, site) in zip(rows, emitted):
     idx = int(row["SequenceIdx"])
     offset = int(row["Offset"])
     strand = row["Strand"]
-    assert strand in {"+", "-"}
+    assert strand == "+"
     assert row["SequenceName"] == source[idx][0]
     assert 0 <= offset <= len(source[idx][1]) - len(site)
     expected = source[idx][1][offset:offset + len(site)]
@@ -60,7 +60,7 @@ for row in pwm_rows:
     assert all(abs(float(row[base]) - value) < 1e-6 for base, value in zip("ACGT", expected))
 
 meme = Path(prefix + ".meme").read_text()
-assert "strands: + -\n" in meme
+assert "strands: +\n" in meme
 blocks = re.findall(r"letter-probability matrix:.*\n((?:[0-9. eE+-]+\n)+)", meme)
 assert len(blocks) == len(matrices)
 for rank, block in enumerate(blocks, 1):
@@ -84,8 +84,8 @@ for row in pipelines:
         assert int(row["Updates"]) == limit
 
 if "--exact-pair" in sys.argv:
-    assert all(orientations == {"+", "-"} for orientations in strands.values())
-    assert all(len(set(motif_sites)) == 1 for motif_sites in sites.values())
-    assert all(row["ThresholdReached"] == "Yes" for row in pipelines)
-    assert all(int(row["BestScore"]) == 18 for row in pipelines)
-print("Validated oriented FASTA, offsets, PWM/MEME, and all pipeline stop reasons:", prefix)
+    assert all(orientations == {"+"} for orientations in strands.values())
+    assert all(motif_sites == [sequence for _, sequence in source] for motif_sites in sites.values())
+    assert all(row["ThresholdReached"] == "No" for row in pipelines)
+    assert all(int(row["BestScore"]) == 14 for row in pipelines)
+print("Validated forward FASTA, offsets, PWM/MEME, and all pipeline stop reasons:", prefix)

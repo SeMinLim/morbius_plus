@@ -412,7 +412,7 @@ void writeMEME( const Config *config,
 
 	outputFile << "MEME version 4\n\n";
 	outputFile << "ALPHABET= " << dataset->alphabet << "\n\n";
-	if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "strands: + -\n\n";
+	if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "strands: +\n\n";
 	outputFile << "Background letter frequencies\n";
 	for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
 		outputFile << dataset->alphabet[symbol] << " " << 1.0 / (double)dataset->alphabetSize;
@@ -518,7 +518,7 @@ void writeSummary( const Config *config,
 	}
 	outputFile << "Elapsed Time             : " << elapsedTime << " seconds\n";
 	if ( config->alphabetMode == ALPHABET_DNA ) {
-		outputFile << "\nStrand Search            : Joint forward/reverse-complement\n";
+		outputFile << "\nStrand Search            : Forward only\n";
 		outputFile << "Initial Strand           : + (all sequences and pipelines)\n";
 		outputFile << "Offset Coordinates       : Original sequence, zero-based leftmost position\n";
 		outputFile << "Maximum Pipeline Updates : " << config->maxUpdateNum << "\n";

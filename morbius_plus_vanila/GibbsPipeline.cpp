@@ -227,14 +227,14 @@ double calculateCandidateLogProb( const Config *config,
 	return logProb;
 }
 
-// Sample once from all (offset, strand) candidates with hierarchical inverse-CDF
+// Sample once from forward-strand offsets with hierarchical inverse-CDF
 CandidateSite sampleCandidate( const Config *config,
 			  const Dataset *dataset,
 			  const string &sequence,
 			  const vector<double> &lpm,
 			  RandomGenerator *randomGenerator ) {
 	size_t offsetNum = sequence.size() - config->motifLength + 1;
-	size_t candidateNum = offsetNum * (config->alphabetMode == ALPHABET_DNA ? 2 : 1);
+	size_t candidateNum = offsetNum;
 	vector<SegmentSummary> segmentSummaries;
 	segmentSummaries.reserve((candidateNum + SEGMENTSIZE - 1) / SEGMENTSIZE);
 	vector<double> logProb(SEGMENTSIZE, 0.0);
@@ -249,10 +249,10 @@ CandidateSite sampleCandidate( const Config *config,
 		double segmentMaximum = -numeric_limits<double>::infinity();
 
 		for ( size_t localIdx = 0; localIdx < segmentCandidateNum; localIdx ++ ) {
-			// Forward offsets precede reverse offsets in one joint candidate space.
+			// Retain only the forward candidate at each offset.
 			size_t candidateIdx = segmentStart + localIdx;
-			uint8_t strand = candidateIdx < offsetNum ? STRAND_FORWARD : STRAND_REVERSE;
-			size_t offset = candidateIdx < offsetNum ? candidateIdx : candidateIdx - offsetNum;
+			uint8_t strand = STRAND_FORWARD;
+			size_t offset = candidateIdx;
 			logProb[localIdx] = calculateCandidateLogProb(config,
 									  dataset,
 									  sequence,
@@ -309,8 +309,8 @@ CandidateSite sampleCandidate( const Config *config,
 		if ( globalCumulative > globalThreshold || segmentIdx + 1 == segmentSummaries.size() ) {
 			size_t candidateIdx = summary.startOffset + summary.localOffset;
 			CandidateSite candidate;
-			candidate.strand = candidateIdx < offsetNum ? STRAND_FORWARD : STRAND_REVERSE;
-			candidate.offset = (uint32_t)(candidateIdx < offsetNum ? candidateIdx : candidateIdx - offsetNum);
+			candidate.strand = STRAND_FORWARD;
+			candidate.offset = (uint32_t)candidateIdx;
 			return candidate;
 		}
 	}
@@ -349,7 +349,7 @@ void runPipeline( const Config *config,
 	double startTime = timeChecker();
 	PipelineState state;
 	initializeOffsets(config, dataset, seedModel, pipelineIdx, state.offsets);
-	// Preserve the existing initial sites and random stream; only Gibbs adds orientations.
+	// Preserve the existing initial sites and random stream; all sites stay forward.
 	state.strands.assign(dataset->sequences.size(), STRAND_FORWARD);
 	result->initialOffsets = state.offsets;
 	initializeRandomGenerator(&state.randomGenerator,

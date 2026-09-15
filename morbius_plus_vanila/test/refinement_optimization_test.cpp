@@ -26,7 +26,8 @@ static void rebuildReferencePWM( const Config *config, const OutputMotif &motif,
 	}
 }
 
-// Serial, uncached control flow from commit 9745cd216a1537b887cccddd3a2ab4bf3bb9ba5e.
+// Serial, uncached control flow from commit 9745cd216a1537b887cccddd3a2ab4bf3bb9ba5e,
+// using the current forward-only scan and refinement proposal limit.
 // Always rescan the candidate, including an identical PWM; do not use the caches.
 static void referenceRefineMotif( const Config *config, const Dataset *primary, const Dataset *control,
 		const RefinementBackground *background, const OutputMotif &startingMotif,
@@ -130,6 +131,9 @@ static void compareResult( const RefinementResult &actual, const RefinementResul
 	require(actual.motif.sitePresent == expected.motif.sitePresent, "site presence mask");
 	require(actual.motif.offsets == expected.motif.offsets, "all fitting offsets");
 	require(actual.motif.strands == expected.motif.strands, "all fitting strands");
+	for ( uint8_t strand : actual.motif.strands ) {
+		require(strand == STRAND_FORWARD, "cached refinement returned a reverse site");
+	}
 	require(actual.initialLogPvalue == expected.initialLogPvalue, "initial log p-value");
 	require(actual.iterations == expected.iterations, "proposal count");
 	require(actual.acceptedIterations == expected.acceptedIterations, "accepted proposal count");
@@ -251,12 +255,12 @@ static void checkGeneratedFixtures( void ) {
 		for ( size_t pipelineIdx = 0; pipelineIdx < pipelines.size(); pipelineIdx ++ ) {
 			PipelineResult &pipeline = pipelines[pipelineIdx];
 			pipeline.bestOffsets = plantedOffsets;
-			pipeline.bestStrands = plantedStrands;
+			pipeline.bestStrands.assign(primaryNum, STRAND_FORWARD);
 			for ( size_t idx = 0; idx < primaryNum; idx ++ ) {
 				if ( (idx + pipelineIdx) % 7 < pipelineIdx % 5 ) {
 					pipeline.bestOffsets[idx] = fixtureWord(&state) %
 						(primary.sequences[idx].size() - config.motifLength + 1);
-					pipeline.bestStrands[idx] = (uint8_t)(fixtureWord(&state) % 2);
+					pipeline.bestStrands[idx] = STRAND_FORWARD;
 				}
 			}
 		}

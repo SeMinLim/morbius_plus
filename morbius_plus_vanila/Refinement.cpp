@@ -92,7 +92,7 @@ void validatePopulationSizes( size_t primaryNum, size_t controlNum ) {
 	}
 }
 
-// One shared, immutable background score per sequence, strand, and offset.
+// One shared, immutable background score per sequence and forward offset.
 struct RefinementBackgroundCache {
 	std::vector<size_t> sequenceStart;
 	std::vector<double> logProbability;
@@ -192,8 +192,8 @@ void scanRefinementSites( const Config *config, const Dataset *dataset,
 			throw std::invalid_argument( "Invalid sequence length for refinement site offsets." );
 		}
 		RefinementSite best = { -std::numeric_limits<double>::infinity(), 0, STRAND_FORWARD };
-		// Iteration order resolves exact ties: forward strand, then the lowest offset.
-		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_REVERSE; strand++ ) {
+		// Iteration order resolves exact ties by the lowest forward offset.
+		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_FORWARD; strand++ ) {
 			for ( size_t offset = 0; offset <= sequence.size() - config->motifLength; offset++ ) {
 				uint32_t context = 0;
 				double motifLogProbability = 0.0;
@@ -237,18 +237,18 @@ void buildRefinementBackgroundCache( const Config *config, const Dataset *datase
 			throw std::invalid_argument( "Invalid sequence length for refinement site offsets." );
 		}
 		size_t offsetNum = length - config->motifLength + 1;
-		if ( offsetNum > (cache->logProbability.max_size() - scoreNum) / 2 ) {
+		if ( offsetNum > cache->logProbability.max_size() - scoreNum ) {
 			throw std::length_error( "Refinement background cache is too large." );
 		}
 		cache->sequenceStart[seqIdx] = scoreNum;
-		scoreNum += 2 * offsetNum;
+		scoreNum += offsetNum;
 	}
 	cache->sequenceStart[dataset->sequences.size()] = scoreNum;
 	cache->logProbability.resize( scoreNum );
 	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
 		const std::string &sequence = dataset->sequences[seqIdx];
 		size_t scoreIdx = cache->sequenceStart[seqIdx];
-		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_REVERSE; strand ++ ) {
+		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_FORWARD; strand ++ ) {
 			for ( size_t offset = 0; offset <= sequence.size() - config->motifLength; offset ++ ) {
 				cache->logProbability[scoreIdx] = calculateRefinementBackgroundLogProbability(
 					config, dataset, background, sequence, (uint32_t)offset, strand );
@@ -276,8 +276,8 @@ void scanCachedRefinementSites( const Config *config, const Dataset *dataset,
 		const std::string &sequence = dataset->sequences[seqIdx];
 		size_t scoreIdx = cache->sequenceStart[seqIdx];
 		RefinementSite best = { -std::numeric_limits<double>::infinity(), 0, STRAND_FORWARD };
-		// Keep the original sum order and ties: forward strand, then lowest offset.
-		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_REVERSE; strand ++ ) {
+		// Keep the original sum order and choose the lowest forward offset on ties.
+		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_FORWARD; strand ++ ) {
 			for ( size_t offset = 0; offset <= sequence.size() - config->motifLength; offset ++ ) {
 				double motifLogProbability = 0.0;
 				for ( size_t column = 0; column < config->motifLength; column ++ ) {

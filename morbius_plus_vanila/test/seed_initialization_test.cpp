@@ -154,7 +154,7 @@ int main( int argc, char **argv ) {
 			result.bestStrands.size() == dataset.sequences.size(), "best state lost a sequence");
 		for ( size_t seqIdx = 0; seqIdx < dataset.sequences.size(); seqIdx ++ ) {
 			require(result.bestOffsets[seqIdx] + config.motifLength <= dataset.sequenceLength &&
-				result.bestStrands[seqIdx] <= STRAND_REVERSE, "best site is out of bounds");
+				result.bestStrands[seqIdx] == STRAND_FORWARD, "best site is out of bounds");
 		}
 		vector<uint32_t> bestBPM;
 		buildBPM(&config, &dataset, result.bestOffsets, result.bestStrands, bestBPM);

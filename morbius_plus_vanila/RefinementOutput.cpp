@@ -80,7 +80,7 @@ static void closeRefinementFile( ofstream &outputFile, const string &filename ) 
 }
 
 static void writeRefinementMEMEHeader( ofstream &outputFile ) {
-	outputFile << "MEME version 4\n\nALPHABET= ACGT\n\nstrands: + -\n\n";
+	outputFile << "MEME version 4\n\nALPHABET= ACGT\n\nstrands: +\n\n";
 	// Match the existing result MEME so default Tomtom scoring does not depend on
 	// whether candidates were exported before or after the final output limit.
 	// Actual refinement likelihoods use the separate Control Markov tables.
@@ -224,7 +224,7 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 		   << "Background: Control only, both strands, Markov order " << REFINEMENTBACKGROUNDORDER << ", computed once and reused.\n"
 		   << "Background smoothing: prior 1/4^k per length-k tuple (total prior mass 1 per tuple length), then conditional normalization.\n"
 		   << "Background context: site-local, starting at order 0 for the first oriented base.\n"
-		   << "Scan: best log2(PWM/background) site per original sequence over both strands.\n"
+		   << "Scan: best log2(PWM/background) site per original sequence over forward strand only.\n"
 		   << "Threshold: complete score-tie groups, inclusive score >= threshold; minimum one-sided Fisher p-value.\n"
 		   << "PWM fit: at most one passing Primary site per sequence; Control sites never enter PWM counts.\n"
 		   << "Pseudocount: " << PSEUDOCOUNT << " per base; PWM probability=(count+1)/(PrimarySiteNum+4).\n"
