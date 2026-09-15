@@ -14,11 +14,13 @@ using namespace std;
 void buildResultCount( const Config *config,
 		       const Dataset *dataset,
 		       const vector<uint32_t> &offsets,
+		       const vector<uint8_t> &strands,
 		       vector<uint32_t> &count ) {
 	count.assign((size_t)dataset->alphabetSize * config->motifLength, 0);
 	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
 		for ( size_t column = 0; column < config->motifLength; column ++ ) {
-			int symbol = dataset->symbolMap[(unsigned char)dataset->sequences[seqIdx][offsets[seqIdx] + column]];
+			int symbol = getSiteSymbol(config, dataset, dataset->sequences[seqIdx],
+						   offsets[seqIdx], strands[seqIdx], column);
 			count[(size_t)symbol * config->motifLength + column] ++;
 		}
 	}
@@ -63,6 +65,7 @@ void selectOutputMotifs( const Config *config,
 		buildResultCount(config,
 				 dataset,
 				 pipelineResults[outputMotif.pipelineIdx].bestOffsets,
+				 pipelineResults[outputMotif.pipelineIdx].bestStrands,
 				 outputMotif.count);
 		outputMotif.consensus = buildConsensus(config, dataset, outputMotif.count);
 		outputMotifs.push_back(outputMotif);
@@ -91,6 +94,7 @@ void selectOutputMotifs( const Config *config,
 		buildResultCount(config,
 				 dataset,
 				 pipelineResults[bestPipelineIdx].bestOffsets,
+				 pipelineResults[bestPipelineIdx].bestStrands,
 				 outputMotif.count);
 
 		bool duplicate = false;
@@ -182,6 +186,20 @@ void writeInitialization( const Config *config,
 	}
 }
 
+// Build a site in its selected motif orientation
+static string buildSiteString( const Config *config,
+			       const Dataset *dataset,
+			       const string &sequence,
+			       uint32_t offset,
+			       uint8_t strand ) {
+	string site(config->motifLength, dataset->alphabet[0]);
+	for ( size_t column = 0; column < config->motifLength; column ++ ) {
+		site[column] = dataset->alphabet[getSiteSymbol(config, dataset, sequence,
+							   offset, strand, column)];
+	}
+	return site;
+}
+
 // Write discovered motif sites in FASTA format
 void writeMotifFASTA( const Config *config,
 		      const Dataset *dataset,
@@ -195,24 +213,34 @@ void writeMotifFASTA( const Config *config,
 	}
 
 	if ( config->outputMotifNum == 1 ) {
-		const vector<uint32_t> &offsets =
-			pipelineResults[outputMotifs[0].pipelineIdx].bestOffsets;
+		const PipelineResult &pipelineResult = pipelineResults[outputMotifs[0].pipelineIdx];
+		const vector<uint32_t> &offsets = pipelineResult.bestOffsets;
+		const vector<uint8_t> &strands = pipelineResult.bestStrands;
 		for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
-			outputFile << ">" << dataset->names[seqIdx] << " offset=" << offsets[seqIdx] << "\n";
-			outputFile << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength) << "\n";
+			outputFile << ">" << dataset->names[seqIdx] << " offset=" << offsets[seqIdx];
+			if ( config->alphabetMode == ALPHABET_DNA ) {
+				outputFile << " strand=" << (strands[seqIdx] == STRAND_REVERSE ? '-' : '+');
+			}
+			outputFile << "\n";
+			outputFile << buildSiteString(config, dataset, dataset->sequences[seqIdx],
+						  offsets[seqIdx], strands[seqIdx]) << "\n";
 		}
 	} else {
 		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
 			int pipelineIdx = outputMotifs[motifIdx].pipelineIdx;
 			const vector<uint32_t> &offsets = pipelineResults[pipelineIdx].bestOffsets;
+			const vector<uint8_t> &strands = pipelineResults[pipelineIdx].bestStrands;
 			for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
 				outputFile << ">MorbiusPlus_" << motifIdx + 1 << "|" << seqIdx
 					   << " motif_rank=" << motifIdx + 1
 					   << " pipeline=" << pipelineIdx
-					   << " offset=" << offsets[seqIdx]
-					   << " source=" << dataset->names[seqIdx] << "\n";
-				outputFile << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
-					   << "\n";
+					   << " offset=" << offsets[seqIdx];
+				if ( config->alphabetMode == ALPHABET_DNA ) {
+					outputFile << " strand=" << (strands[seqIdx] == STRAND_REVERSE ? '-' : '+');
+				}
+				outputFile << " source=" << dataset->names[seqIdx] << "\n";
+				outputFile << buildSiteString(config, dataset, dataset->sequences[seqIdx],
+							  offsets[seqIdx], strands[seqIdx]) << "\n";
 			}
 		}
 	}
@@ -232,29 +260,41 @@ void writeOffsets( const Config *config,
 	}
 
 	if ( config->outputMotifNum == 1 ) {
-		const vector<uint32_t> &offsets =
-			pipelineResults[outputMotifs[0].pipelineIdx].bestOffsets;
-		outputFile << "SequenceIdx\tSequenceName\tOffset\tMotif\n";
+		const PipelineResult &pipelineResult = pipelineResults[outputMotifs[0].pipelineIdx];
+		const vector<uint32_t> &offsets = pipelineResult.bestOffsets;
+		const vector<uint8_t> &strands = pipelineResult.bestStrands;
+		outputFile << "SequenceIdx\tSequenceName\tOffset";
+		if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "\tStrand";
+		outputFile << "\tMotif\n";
 		for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
 			outputFile << seqIdx << "\t"
 				   << dataset->names[seqIdx] << "\t"
-				   << offsets[seqIdx] << "\t"
-				   << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
-				   << "\n";
+				   << offsets[seqIdx] << "\t";
+			if ( config->alphabetMode == ALPHABET_DNA ) {
+				outputFile << (strands[seqIdx] == STRAND_REVERSE ? '-' : '+') << "\t";
+			}
+			outputFile << buildSiteString(config, dataset, dataset->sequences[seqIdx],
+						  offsets[seqIdx], strands[seqIdx]) << "\n";
 		}
 	} else {
-		outputFile << "MotifRank\tPipelineIdx\tSequenceIdx\tSequenceName\tOffset\tMotif\n";
+		outputFile << "MotifRank\tPipelineIdx\tSequenceIdx\tSequenceName\tOffset";
+		if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "\tStrand";
+		outputFile << "\tMotif\n";
 		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
 			int pipelineIdx = outputMotifs[motifIdx].pipelineIdx;
 			const vector<uint32_t> &offsets = pipelineResults[pipelineIdx].bestOffsets;
+			const vector<uint8_t> &strands = pipelineResults[pipelineIdx].bestStrands;
 			for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
 				outputFile << motifIdx + 1 << "\t"
 					   << pipelineIdx << "\t"
 					   << seqIdx << "\t"
 					   << dataset->names[seqIdx] << "\t"
-					   << offsets[seqIdx] << "\t"
-					   << dataset->sequences[seqIdx].substr(offsets[seqIdx], config->motifLength)
-					   << "\n";
+					   << offsets[seqIdx] << "\t";
+				if ( config->alphabetMode == ALPHABET_DNA ) {
+					outputFile << (strands[seqIdx] == STRAND_REVERSE ? '-' : '+') << "\t";
+				}
+				outputFile << buildSiteString(config, dataset, dataset->sequences[seqIdx],
+							  offsets[seqIdx], strands[seqIdx]) << "\n";
 			}
 		}
 	}
@@ -331,7 +371,7 @@ void writeMEME( const Config *config,
 
 	outputFile << "MEME version 4\n\n";
 	outputFile << "ALPHABET= " << dataset->alphabet << "\n\n";
-	if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "strands: +\n\n";
+	if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "strands: + -\n\n";
 	outputFile << "Background letter frequencies\n";
 	for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
 		outputFile << dataset->alphabet[symbol] << " " << 1.0 / (double)dataset->alphabetSize;
@@ -427,6 +467,21 @@ void writeSummary( const Config *config,
 		}
 	}
 	outputFile << "Elapsed Time             : " << elapsedTime << " seconds\n";
+	if ( config->alphabetMode == ALPHABET_DNA ) {
+		outputFile << "\nStrand Search            : Joint forward/reverse-complement\n";
+		outputFile << "Initial Strand           : + (all sequences and pipelines)\n";
+		outputFile << "Offset Coordinates       : Original sequence, zero-based leftmost position\n";
+		outputFile << "Maximum Pipeline Updates : " << config->maxUpdateNum << "\n";
+		outputFile << "\n[All Pipelines]\n";
+		outputFile << "Pipeline\tBestScore\tUpdates\tThresholdReached\tTerminationReason\n";
+		for ( size_t pipelineIdx = 0; pipelineIdx < pipelineResults.size(); pipelineIdx ++ ) {
+			const PipelineResult &pipelineResult = pipelineResults[pipelineIdx];
+			outputFile << pipelineIdx << "\t" << pipelineResult.bestScore << "\t"
+				   << pipelineResult.updateNum << "\t"
+				   << (pipelineResult.thresholdReached ? "Yes" : "No") << "\t"
+				   << (pipelineResult.thresholdReached ? "threshold" : "max_updates") << "\n";
+		}
+	}
 	outputFile.close();
 }
 

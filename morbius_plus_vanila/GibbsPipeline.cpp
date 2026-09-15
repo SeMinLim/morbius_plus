@@ -158,11 +158,13 @@ void initializeOffsets( const Config *config,
 void buildBPM( const Config *config,
 	       const Dataset *dataset,
 	       const vector<uint32_t> &offsets,
+	       const vector<uint8_t> &strands,
 	       vector<uint32_t> &bpm ) {
 	bpm.assign((size_t)dataset->alphabetSize * config->motifLength, PSEUDOCOUNT);
 	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
 		for ( size_t column = 0; column < config->motifLength; column ++ ) {
-			int symbol = dataset->symbolMap[(unsigned char)dataset->sequences[seqIdx][offsets[seqIdx] + column]];
+			int symbol = getSiteSymbol(config, dataset, dataset->sequences[seqIdx],
+						   offsets[seqIdx], strands[seqIdx], column);
 			bpm[(size_t)symbol * config->motifLength + column] ++;
 		}
 	}
@@ -215,22 +217,24 @@ double calculateCandidateLogProb( const Config *config,
 					  const Dataset *dataset,
 					  const string &sequence,
 					  size_t candidateOffset,
+					  uint8_t candidateStrand,
 					  const vector<double> &lpm ) {
 	double logProb = 0.0;
 	for ( size_t column = 0; column < config->motifLength; column ++ ) {
-		int symbol = dataset->symbolMap[(unsigned char)sequence[candidateOffset + column]];
+		int symbol = getSiteSymbol(config, dataset, sequence, candidateOffset, candidateStrand, column);
 		logProb = logProb + lpm[(size_t)symbol * config->motifLength + column];
 	}
 	return logProb;
 }
 
-// Sample a candidate with hierarchical inverse-CDF
-uint32_t sampleCandidate( const Config *config,
+// Sample once from all (offset, strand) candidates with hierarchical inverse-CDF
+CandidateSite sampleCandidate( const Config *config,
 			  const Dataset *dataset,
 			  const string &sequence,
 			  const vector<double> &lpm,
 			  RandomGenerator *randomGenerator ) {
-	size_t candidateNum = sequence.size() - config->motifLength + 1;
+	size_t offsetNum = sequence.size() - config->motifLength + 1;
+	size_t candidateNum = offsetNum * (config->alphabetMode == ALPHABET_DNA ? 2 : 1);
 	vector<SegmentSummary> segmentSummaries;
 	segmentSummaries.reserve((candidateNum + SEGMENTSIZE - 1) / SEGMENTSIZE);
 	vector<double> logProb(SEGMENTSIZE, 0.0);
@@ -245,10 +249,15 @@ uint32_t sampleCandidate( const Config *config,
 		double segmentMaximum = -numeric_limits<double>::infinity();
 
 		for ( size_t localIdx = 0; localIdx < segmentCandidateNum; localIdx ++ ) {
+			// Forward offsets precede reverse offsets in one joint candidate space.
+			size_t candidateIdx = segmentStart + localIdx;
+			uint8_t strand = candidateIdx < offsetNum ? STRAND_FORWARD : STRAND_REVERSE;
+			size_t offset = candidateIdx < offsetNum ? candidateIdx : candidateIdx - offsetNum;
 			logProb[localIdx] = calculateCandidateLogProb(config,
 									  dataset,
 									  sequence,
-									  segmentStart + localIdx,
+									  offset,
+									  strand,
 									  lpm);
 			segmentMaximum = max(segmentMaximum, logProb[localIdx]);
 		}
@@ -298,27 +307,33 @@ uint32_t sampleCandidate( const Config *config,
 		double alignedMass = ldexp(summary.mass, summary.exponent - globalExponent);
 		globalCumulative = globalCumulative + alignedMass;
 		if ( globalCumulative > globalThreshold || segmentIdx + 1 == segmentSummaries.size() ) {
-			return (uint32_t)(summary.startOffset + summary.localOffset);
+			size_t candidateIdx = summary.startOffset + summary.localOffset;
+			CandidateSite candidate;
+			candidate.strand = candidateIdx < offsetNum ? STRAND_FORWARD : STRAND_REVERSE;
+			candidate.offset = (uint32_t)(candidateIdx < offsetNum ? candidateIdx : candidateIdx - offsetNum);
+			return candidate;
 		}
 	}
 
-	return 0;
+	return CandidateSite{0, STRAND_FORWARD};
 }
 
 // Prepare the initial leave-one-out BPM and LPM
 void prepareInitialPipelineState( const Config *config,
 				  const Dataset *dataset,
 				  PipelineState *state ) {
-	buildBPM(config, dataset, state->offsets, state->bpm);
+	buildBPM(config, dataset, state->offsets, state->strands, state->bpm);
 	state->currentScore = calculateAgreementScore(config, dataset, state->bpm);
 	state->bestScore = state->currentScore;
 	state->bestOffsets = state->offsets;
+	state->bestStrands = state->strands;
 	state->updateNum = 0;
 	state->thresholdReached = false;
 
 	// Remove sequence 0 to form the first leave-one-out BPM
 	for ( size_t column = 0; column < config->motifLength; column ++ ) {
-		int symbol = dataset->symbolMap[(unsigned char)dataset->sequences[0][state->offsets[0] + column]];
+		int symbol = getSiteSymbol(config, dataset, dataset->sequences[0],
+					   state->offsets[0], state->strands[0], column);
 		state->bpm[(size_t)symbol * config->motifLength + column] --;
 	}
 	buildLPM(state->bpm, state->lpm);
@@ -334,6 +349,8 @@ void runPipeline( const Config *config,
 	double startTime = timeChecker();
 	PipelineState state;
 	initializeOffsets(config, dataset, seedModel, pipelineIdx, state.offsets);
+	// Preserve the existing initial sites and random stream; only Gibbs adds orientations.
+	state.strands.assign(dataset->sequences.size(), STRAND_FORWARD);
 	result->initialOffsets = state.offsets;
 	initializeRandomGenerator(&state.randomGenerator,
 				  config->randomSeed ^
@@ -345,7 +362,7 @@ void runPipeline( const Config *config,
 	for ( size_t seqIdx = 0;
 	      state.thresholdReached == false && state.updateNum < maxUpdateNum;
 	      seqIdx = (seqIdx + 1) % dataset->sequences.size() ) {
-		uint32_t newOffset = sampleCandidate(config,
+		CandidateSite newSite = sampleCandidate(config,
 						     dataset,
 						     dataset->sequences[seqIdx],
 						     state.lpm,
@@ -353,10 +370,12 @@ void runPipeline( const Config *config,
 
 		// Add the new tentative motif to create the complete BPM
 		for ( size_t column = 0; column < config->motifLength; column ++ ) {
-			int symbol = dataset->symbolMap[(unsigned char)dataset->sequences[seqIdx][newOffset + column]];
+			int symbol = getSiteSymbol(config, dataset, dataset->sequences[seqIdx],
+						   newSite.offset, newSite.strand, column);
 			state.bpm[(size_t)symbol * config->motifLength + column] ++;
 		}
-		state.offsets[seqIdx] = newOffset;
+		state.offsets[seqIdx] = newSite.offset;
+		state.strands[seqIdx] = newSite.strand;
 		state.currentScore = calculateAgreementScore(config, dataset, state.bpm);
 		state.updateNum ++;
 
@@ -364,6 +383,7 @@ void runPipeline( const Config *config,
 		if ( state.currentScore > state.bestScore ) {
 			state.bestScore = state.currentScore;
 			state.bestOffsets = state.offsets;
+			state.bestStrands = state.strands;
 		}
 		if ( state.bestScore >= rawScoreThreshold ) {
 			state.thresholdReached = true;
@@ -374,9 +394,12 @@ void runPipeline( const Config *config,
 		// Remove the next old tentative motif and selectively update the LPM
 		size_t nextSeqIdx = (seqIdx + 1) % dataset->sequences.size();
 		uint32_t nextOldOffset = state.offsets[nextSeqIdx];
+		uint8_t nextOldStrand = state.strands[nextSeqIdx];
 		for ( size_t column = 0; column < config->motifLength; column ++ ) {
-			int newSymbol = dataset->symbolMap[(unsigned char)dataset->sequences[seqIdx][newOffset + column]];
-			int nextOldSymbol = dataset->symbolMap[(unsigned char)dataset->sequences[nextSeqIdx][nextOldOffset + column]];
+			int newSymbol = getSiteSymbol(config, dataset, dataset->sequences[seqIdx],
+						      newSite.offset, newSite.strand, column);
+			int nextOldSymbol = getSiteSymbol(config, dataset, dataset->sequences[nextSeqIdx],
+							  nextOldOffset, nextOldStrand, column);
 
 			state.bpm[(size_t)nextOldSymbol * config->motifLength + column] --;
 			if ( newSymbol != nextOldSymbol ) {
@@ -389,6 +412,7 @@ void runPipeline( const Config *config,
 	}
 
 	result->bestOffsets = state.bestOffsets;
+	result->bestStrands = state.bestStrands;
 	result->bestScore = state.bestScore;
 	result->updateNum = state.updateNum;
 	result->thresholdReached = state.thresholdReached;

@@ -64,7 +64,19 @@ mkdir -p "$OUTPUT_DIR"
 	--threads 4 \
 	> "$OUTPUT_DIR/duplicate_result.stdout.txt"
 
-grep -q "Consensus Subsequence    : ACGTGCAA" "$OUTPUT_DIR/dna_result.summary.txt"
+"$ROOT_DIR/morbius_plus_vanila" \
+	--input "$ROOT_DIR/test/DNA_BOTH_STRANDS_TEST.fasta" \
+	--output "$OUTPUT_DIR/both_strands_result" \
+	--alphabet dna \
+	--motif-length 6 \
+	--motif-count 16 \
+	--max-updates 64 \
+	--score-threshold 1.0 \
+	--seed 1 \
+	--threads 4 \
+	> "$OUTPUT_DIR/both_strands_result.stdout.txt"
+
+grep -Eq "Consensus Subsequence    : (ACGTGCAA|TTGCACGT)" "$OUTPUT_DIR/dna_result.summary.txt"
 grep -q "Consensus Subsequence    : MKLDPA" "$OUTPUT_DIR/protein_result.summary.txt"
 test -s "$OUTPUT_DIR/dna_result.meme"
 test -s "$OUTPUT_DIR/protein_result.meme"
@@ -99,7 +111,7 @@ test "$(wc -l < "$OUTPUT_DIR/dna_result_multiple.offsets.tsv")" -eq 161
 test "$(wc -l < "$OUTPUT_DIR/dna_result_multiple.pwm.tsv")" -eq 41
 
 tail -n +2 "$OUTPUT_DIR/dna_result.offsets.tsv" > "$OUTPUT_DIR/dna_result.offsets.data.txt"
-awk -F '\t' 'NR > 1 && $1 == 1 { print $3 "\t" $4 "\t" $5 "\t" $6 }' \
+awk -F '\t' 'NR > 1 && $1 == 1 { print $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 }' \
 	"$OUTPUT_DIR/dna_result_multiple.offsets.tsv" > "$OUTPUT_DIR/dna_result_multiple.first.offsets.data.txt"
 diff -u "$OUTPUT_DIR/dna_result.offsets.data.txt" \
 	"$OUTPUT_DIR/dna_result_multiple.first.offsets.data.txt"
@@ -144,5 +156,19 @@ grep -q 'Invalid value for --motif-count' "$OUTPUT_DIR/invalid_overflow.stdout.t
 	-o "$OUTPUT_DIR/seed_initialization_test"
 "$OUTPUT_DIR/seed_initialization_test" "$ROOT_DIR/test/DNA_TEST.fasta" \
 	> "$OUTPUT_DIR/seed_initialization_test.stdout.txt"
+
+"${CXX:-g++}" -O2 -std=c++17 -Wall -Wextra -pedantic -pthread \
+	-I "$ROOT_DIR" \
+	"$ROOT_DIR/test/strand_test.cpp" \
+	"$ROOT_DIR/Utility.cpp" "$ROOT_DIR/SeedInitialization.cpp" \
+	"$ROOT_DIR/GibbsPipeline.cpp" "$ROOT_DIR/Result.cpp" \
+	-o "$OUTPUT_DIR/strand_test"
+"$OUTPUT_DIR/strand_test" > "$OUTPUT_DIR/strand_test.stdout.txt"
+python3 "$ROOT_DIR/test/validate_strand_outputs.py" "$ROOT_DIR/test/DNA_TEST.fasta" \
+	"$OUTPUT_DIR/dna_result"
+python3 "$ROOT_DIR/test/validate_strand_outputs.py" "$ROOT_DIR/test/DNA_TEST.fasta" \
+	"$OUTPUT_DIR/dna_result_multiple"
+python3 "$ROOT_DIR/test/validate_strand_outputs.py" "$ROOT_DIR/test/DNA_BOTH_STRANDS_TEST.fasta" \
+	"$OUTPUT_DIR/both_strands_result" --exact-pair
 
 printf "All Morbius+ vanilla tests passed.\n"

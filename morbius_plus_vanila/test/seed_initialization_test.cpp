@@ -126,10 +126,6 @@ int main( int argc, char **argv ) {
 		37, 46, 52, 48, 8, 49, 18, 4, 36, 41, 25, 8, 18, 10, 19, 11,
 		46, 38, 33, 32, 30, 34, 5, 19, 0, 39, 34, 31, 44, 39, 15, 35
 	};
-	const vector<uint32_t> legacyBestOffsets = {
-		33, 3, 10, 17, 24, 31, 38, 37, 3, 10, 51, 24, 31, 38, 12, 3,
-		10, 17, 24, 31, 38, 37, 3, 10, 17, 24, 31, 38, 19, 33, 10, 17
-	};
 	set<uint32_t> distinctSeeds;
 	set<size_t> distinctAnchors;
 	for ( size_t pipelineIdx = 0; pipelineIdx < models.size(); pipelineIdx ++ ) {
@@ -153,11 +149,19 @@ int main( int argc, char **argv ) {
 	vector<PipelineResult> results;
 	runPipelines(&config, &dataset, models, results);
 	require(results[0].initialOffsets == legacyInitialOffsets, "pipeline 0 initialization changed");
-	require(results[0].bestOffsets == legacyBestOffsets && results[0].bestScore == 233 &&
-		results[0].updateNum == 128 && results[0].thresholdReached == false,
-		"pipeline 0 Gibbs trajectory changed");
 	bool distinguishesSharedSeed = false;
 	for ( size_t pipelineIdx = 0; pipelineIdx < models.size(); pipelineIdx ++ ) {
+		const PipelineResult &result = results[pipelineIdx];
+		require(result.bestOffsets.size() == dataset.sequences.size() &&
+			result.bestStrands.size() == dataset.sequences.size(), "best state lost a sequence");
+		for ( size_t seqIdx = 0; seqIdx < dataset.sequences.size(); seqIdx ++ ) {
+			require(result.bestOffsets[seqIdx] + config.motifLength <= dataset.sequenceLength &&
+				result.bestStrands[seqIdx] <= STRAND_REVERSE, "best site is out of bounds");
+		}
+		vector<uint32_t> bestBPM;
+		buildBPM(&config, &dataset, result.bestOffsets, result.bestStrands, bestBPM);
+		require(calculateAgreementScore(&config, &dataset, bestBPM) == result.bestScore,
+			"best score does not match stored offsets and strands");
 		vector<uint32_t> expectedOffsets;
 		initializeOffsets(&config, &dataset, &models[pipelineIdx], (int)pipelineIdx, expectedOffsets);
 		require(results[pipelineIdx].initialOffsets == expectedOffsets, "pipeline received another pipeline's seed");
@@ -179,6 +183,7 @@ int main( int argc, char **argv ) {
 		const PipelineResult &first = results[pipelineIdx];
 		const PipelineResult &second = repeatedResults[pipelineIdx];
 		require(first.initialOffsets == second.initialOffsets && first.bestOffsets == second.bestOffsets &&
+			first.bestStrands == second.bestStrands &&
 			first.bestScore == second.bestScore && first.updateNum == second.updateNum &&
 			first.thresholdReached == second.thresholdReached,
 			"thread count or output motif count changed a pipeline result");

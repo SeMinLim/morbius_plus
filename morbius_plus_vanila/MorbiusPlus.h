@@ -10,6 +10,8 @@
 
 #define ALPHABET_DNA 0
 #define ALPHABET_PROTEIN 1
+#define STRAND_FORWARD 0
+#define STRAND_REVERSE 1
 
 #define SAMPLEMAX 256
 #define ANCHORMAX 8
@@ -80,9 +82,16 @@ typedef struct SegmentSummary {
 	size_t localOffset;
 }SegmentSummary;
 
+typedef struct CandidateSite {
+	uint32_t offset;
+	uint8_t strand;
+}CandidateSite;
+
 typedef struct PipelineState {
 	std::vector<uint32_t> offsets;
 	std::vector<uint32_t> bestOffsets;
+	std::vector<uint8_t> strands;
+	std::vector<uint8_t> bestStrands;
 	std::vector<uint32_t> bpm;
 	std::vector<double> lpm;
 	RandomGenerator randomGenerator;
@@ -95,6 +104,7 @@ typedef struct PipelineState {
 typedef struct PipelineResult {
 	std::vector<uint32_t> initialOffsets;
 	std::vector<uint32_t> bestOffsets;
+	std::vector<uint8_t> bestStrands;
 	uint64_t bestScore;
 	uint64_t updateNum;
 	bool thresholdReached;
@@ -106,6 +116,20 @@ typedef struct OutputMotif {
 	std::vector<uint32_t> count;
 	std::string consensus;
 }OutputMotif;
+
+// Offsets always address the leftmost base of the original sequence window.
+inline int getSiteSymbol( const Config *config,
+			  const Dataset *dataset,
+			  const std::string &sequence,
+			  size_t offset,
+			  uint8_t strand,
+			  size_t column ) {
+	if ( config->alphabetMode == ALPHABET_DNA && strand == STRAND_REVERSE ) {
+		int symbol = dataset->symbolMap[(unsigned char)sequence[offset + config->motifLength - 1 - column]];
+		return 3 - symbol; // DNA alphabet order is A, C, G, T.
+	}
+	return dataset->symbolMap[(unsigned char)sequence[offset + column]];
+}
 
 
 double timeChecker( void );
@@ -136,6 +160,7 @@ void initializeOffsets( const Config *config,
 void buildBPM( const Config *config,
 	       const Dataset *dataset,
 	       const std::vector<uint32_t> &offsets,
+	       const std::vector<uint8_t> &strands,
 	       std::vector<uint32_t> &bpm );
 void buildLPM( const std::vector<uint32_t> &bpm, std::vector<double> &lpm );
 uint64_t calculateAgreementScore( const Config *config,
@@ -154,6 +179,7 @@ int selectBestPipeline( const std::vector<PipelineResult> &pipelineResults );
 void buildResultCount( const Config *config,
 		       const Dataset *dataset,
 		       const std::vector<uint32_t> &offsets,
+		       const std::vector<uint8_t> &strands,
 		       std::vector<uint32_t> &count );
 std::string buildConsensus( const Config *config,
 			    const Dataset *dataset,
