@@ -8,7 +8,7 @@
   - DNA: 8-mer, third-order Markov model, Shannon-entropy filtering
   - Protein: 3-mer, first-order Markov model
   - `SampleNum = min(256, SeqNum)`
-  - top 16 distinct seeds, one independently selected anchor per seed from up to eight candidates, exact matching, and fixed guidance rate 0.5
+  - one highest-ranked seed and one anchor selected from up to eight candidates, shared across all 16 pipelines, exact matching, and fixed guidance rate 0.5
 - Persistent Base-Pair Matrix (BPM) with pseudocount 1
 - Log Probability Matrix (LPM)
 - Log-domain candidate probability calculation
@@ -20,13 +20,13 @@
 - Independent pipeline termination and score-ranked unique motif output
 - FASTA, offsets, PWM, MEME, and summary outputs
 
-Sequence-level seed support and Markov statistics are computed once and reused by all 16 pipelines. Eligible observed seeds retain the existing order: Markov-adjusted rank descending, support descending, then seed code ascending. Pipeline 0 receives the highest-ranked seed, pipeline 1 receives the next seed, and so on. Each seed uses the existing anchor evaluation independently; equal anchor numbers across pipelines are allowed. If fewer than 16 eligible seeds exist, the remaining pipelines use the existing random-only fallback. A selected seed with no legal sampled anchor also uses that fallback; seeds are never reused to fill pipeline slots.
+Sequence-level seed support and Markov statistics are computed once. The original single-seed selection chooses the highest Markov-adjusted rank, then higher support, then lower seed code to break ties. Its anchor is evaluated once with the existing scoring rule, and legal guided offsets are collected once. This complete seed model is assigned to all 16 pipelines. If the selected seed is unavailable or has no legal sampled anchor, all pipelines retain their existing random-only fallback.
 
-Distinct seed words do not guarantee distinct initial offset arrays or final PWMs.
+Every pipeline receives the same seed word and anchor, while its original pipeline-specific RNG still chooses its initial offsets and subsequent Gibbs samples. Initial offset arrays and final PWMs may therefore differ; sharing a seed does not clone a pipeline's random state or offsets.
 
 For DNA, each Gibbs update evaluates the forward and reverse-complement window at every legal offset and samples one site from their joint probability distribution. Each original sequence still contributes exactly one site to the BPM. The selected strand is applied when adding and removing sites and is saved with the offsets in each pipeline's best state. Final site sequences and PWM counts use these selected orientations. Protein discovery remains forward-only.
 
-Seed ranking, per-seed anchor selection, and initial offsets are unchanged. All initial DNA strands are forward, without drawing additional random numbers. The guidance rate, per-pipeline random-seed derivation, motif length, pipeline count, update limit, threshold and termination rules, and output ranking/deduplication are unchanged. DNA candidate counts increase from `L-W+1` to `2(L-W+1)` for sequence length `L` and motif length `W`; evaluating the extra candidates increases computation, so elapsed-time effects require measurement.
+Seed-ranking and anchor-scoring formulas are unchanged; the highest-ranked seed and its anchor are shared again. The offset-initialization algorithm is unchanged and uses that shared model with each pipeline's own RNG. All initial DNA strands are forward, without drawing additional random numbers. The guidance rate, per-pipeline random-seed derivation, motif length, pipeline count, update limit, threshold and termination rules, and output ranking/deduplication are unchanged. DNA candidate counts increase from `L-W+1` to `2(L-W+1)` for sequence length `L` and motif length `W`; evaluating the extra candidates increases computation, so elapsed-time effects require measurement.
 
 ## Build
 
@@ -75,9 +75,9 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 ```
 
 This is a separate, STREME-inspired refinement of the completed Gibbs candidates.
-It does not add an absent-site state to the Gibbs sampler. All 16 pipelines retain
-the same seeds, anchors, initial offsets, RNG streams, joint strand sampling,
-agreement score and termination rules. The default Gibbs agreement threshold is
+It does not add an absent-site state to the Gibbs sampler. Enabling refinement
+does not change the shared seed and anchor, initial offsets, per-pipeline RNG
+streams, joint strand sampling, agreement score or termination rules. The default Gibbs agreement threshold is
 still **0.80**. Without `--control`, the existing DNA and protein behavior is
 preserved. Control-based refinement currently requires DNA and the same fixed
 sequence length in Primary and Control; their sequence counts may differ.

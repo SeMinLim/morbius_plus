@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <set>
 #include <string>
 #include <vector>
 using namespace std;
@@ -69,6 +68,20 @@ static size_t optimalAnchor( const Config &config,
 	return bestAnchor;
 }
 
+static void checkSharedModels( const vector<SeedModel> &models ) {
+	require(models.size() == 16, "missing shared seed assignments");
+	const SeedModel &shared = models[0];
+	for ( const SeedModel &model : models ) {
+		require(model.valid == shared.valid && model.sampleNum == shared.sampleNum &&
+			model.seedLength == shared.seedLength && model.seedCode == shared.seedCode &&
+			model.seedString == shared.seedString && model.seedSupport == shared.seedSupport &&
+			model.seedExpectedSupport == shared.seedExpectedSupport && model.seedRank == shared.seedRank &&
+			model.anchorOffset == shared.anchorOffset && model.anchorRank == shared.anchorRank &&
+			model.guidedOffsets == shared.guidedOffsets,
+			"pipelines did not receive the same complete seed model");
+	}
+}
+
 static void checkFallback( Config config, const string &sequence, size_t expectedSeedNum ) {
 	Dataset dataset;
 	configureAlphabet(config.alphabetMode, &dataset);
@@ -79,10 +92,10 @@ static void checkFallback( Config config, const string &sequence, size_t expecte
 	validateWorkload(&config, &dataset);
 	vector<SeedModel> models;
 	buildSeedModels(&config, &dataset, models);
-	require(models.size() == 16, "fallback changed pipeline count");
+	checkSharedModels(models);
 	size_t validNum = 0;
 	for ( const SeedModel &model : models ) if ( model.valid ) validNum ++;
-	require(validNum == expectedSeedNum, "fallback fabricated or repeated seeds");
+	require(validNum == expectedSeedNum, "shared seed validity or random fallback changed");
 	vector<PipelineResult> results;
 	runPipelines(&config, &dataset, models, results);
 	SeedModel randomModel = {};
@@ -95,7 +108,7 @@ static void checkFallback( Config config, const string &sequence, size_t expecte
 		if ( models[pipelineIdx].valid == false ) {
 			vector<uint32_t> expectedOffsets;
 			initializeOffsets(&config, &dataset, &randomModel, (int)pipelineIdx, expectedOffsets);
-			require(offsets == expectedOffsets, "unused seed slot did not use existing random fallback");
+			require(offsets == expectedOffsets, "invalid shared seed did not use existing random fallback");
 		}
 		if ( sequence.size() == config.motifLength ) {
 			require(offsets == vector<uint32_t>(4, 0), "identical legal initial arrays were altered");
@@ -114,32 +127,17 @@ int main( int argc, char **argv ) {
 
 	vector<SeedModel> models;
 	buildSeedModels(&config, &dataset, models);
-	require(models.size() == 16, "missing per-pipeline seed models");
+	checkSharedModels(models);
 
-	// Golden rank order from commit 7a04641d266f4ca8d921cccf965cae08b3b3192a:
-	// run the original selectSeed repeatedly, excluding only each prior winner.
-	const vector<uint32_t> legacySeedCodes = {
-		23527, 63982, 6434, 55033, 17992, 30142, 5644, 25779,
-		25738, 7535, 5880, 7056, 31290, 1470, 367, 39212
-	};
+	// Golden shared seed and pipeline 0 offsets from the original single-seed
+	// initialization in commit 7a04641d266f4ca8d921cccf965cae08b3b3192a.
 	const vector<uint32_t> legacyInitialOffsets = {
 		37, 46, 52, 48, 8, 49, 18, 4, 36, 41, 25, 8, 18, 10, 19, 11,
 		46, 38, 33, 32, 30, 34, 5, 19, 0, 39, 34, 31, 44, 39, 15, 35
 	};
-	set<uint32_t> distinctSeeds;
-	set<size_t> distinctAnchors;
-	for ( size_t pipelineIdx = 0; pipelineIdx < models.size(); pipelineIdx ++ ) {
-		const SeedModel &model = models[pipelineIdx];
-		require(model.valid, "fixture did not receive 16 valid seeds");
-		require(model.seedCode == legacySeedCodes[pipelineIdx], "existing Markov ranking changed");
-		require(model.anchorOffset == optimalAnchor(config, dataset, model), "anchor is not independently optimal");
-		require(model.anchorOffset <= 2, "width-10 anchor out of bounds");
-		distinctSeeds.insert(model.seedCode);
-		distinctAnchors.insert(model.anchorOffset);
-		if ( pipelineIdx > 0 ) require(models[pipelineIdx - 1].seedRank >= model.seedRank, "seed order is not descending");
-	}
-	require(distinctSeeds.size() == 16, "seed words are shared across pipelines");
-	require(distinctAnchors.size() == 3, "fixture must exercise all legal anchors and repeated anchors");
+	require(models[0].valid && models[0].seedCode == 23527, "original Markov seed winner changed");
+	require(models[0].anchorOffset == optimalAnchor(config, dataset, models[0]),
+		"shared anchor does not maximize the original anchor score");
 	require(models[0].seedString == "CCGTTGCT" && models[0].seedSupport == 1 &&
 		models[0].anchorOffset == 1, "legacy highest-ranked seed metadata changed");
 	require(abs(models[0].seedExpectedSupport - 0.0029554144597797507) < 1.0e-14 &&
@@ -149,7 +147,7 @@ int main( int argc, char **argv ) {
 	vector<PipelineResult> results;
 	runPipelines(&config, &dataset, models, results);
 	require(results[0].initialOffsets == legacyInitialOffsets, "pipeline 0 initialization changed");
-	bool distinguishesSharedSeed = false;
+	bool hasDifferentInitialOffsets = false;
 	for ( size_t pipelineIdx = 0; pipelineIdx < models.size(); pipelineIdx ++ ) {
 		const PipelineResult &result = results[pipelineIdx];
 		require(result.bestOffsets.size() == dataset.sequences.size() &&
@@ -163,16 +161,15 @@ int main( int argc, char **argv ) {
 		require(calculateAgreementScore(&config, &dataset, bestBPM) == result.bestScore,
 			"best score does not match stored offsets and strands");
 		vector<uint32_t> expectedOffsets;
-		initializeOffsets(&config, &dataset, &models[pipelineIdx], (int)pipelineIdx, expectedOffsets);
-		require(results[pipelineIdx].initialOffsets == expectedOffsets, "pipeline received another pipeline's seed");
-		vector<uint32_t> sharedSeedOffsets;
-		initializeOffsets(&config, &dataset, &models[0], (int)pipelineIdx, sharedSeedOffsets);
-		if ( expectedOffsets != sharedSeedOffsets ) distinguishesSharedSeed = true;
+		initializeOffsets(&config, &dataset, &models[0], (int)pipelineIdx, expectedOffsets);
+		require(result.initialOffsets == expectedOffsets,
+			"shared seed initialization did not preserve the pipeline's own random stream");
+		if ( result.initialOffsets != results[0].initialOffsets ) hasDifferentInitialOffsets = true;
 		for ( uint32_t offset : expectedOffsets ) {
 			require(offset + config.motifLength <= dataset.sequenceLength, "initial offset out of bounds");
 		}
 	}
-	require(distinguishesSharedSeed, "fixture cannot detect accidental shared-seed routing");
+	require(hasDifferentInitialOffsets, "fixture cannot detect accidental copying of pipeline 0 offsets");
 
 	// Thread scheduling and requested output count must not affect discovery.
 	config.threadNum = 4;
@@ -190,9 +187,9 @@ int main( int argc, char **argv ) {
 	}
 
 	config.motifLength = 8;
-	checkFallback(config, "ACGTACGT", 1);
+	checkFallback(config, "ACGTACGT", 16);
 	config.motifLength = 10;
 	checkFallback(config, "AAAAAAAAAAAA", 0);
-	cout << "All distinct-seed initialization tests passed.\n";
+	cout << "All shared-seed initialization tests passed.\n";
 	return 0;
 }

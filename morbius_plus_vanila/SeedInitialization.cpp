@@ -157,20 +157,18 @@ double calculateMarkovSeedProbability( uint32_t seedCode,
 	return probability;
 }
 
-// Select the highest-ranked distinct seeds in pipeline order
-void selectSeeds( const Dataset *dataset,
+// Select the highest-ranked seed
+void selectSeed( const Dataset *dataset,
 		 size_t sampleNum,
 		 size_t seedLength,
 		 const vector<uint32_t> &seedSupport,
 		 const vector<uint8_t> &seedValid,
 		 const MarkovModel *markovModel,
-		 vector<SeedModel> &seedModels ) {
-	seedModels.assign((size_t)NUMPIPELINE, SeedModel{});
-	for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
-		seedModels[pipelineIdx].seedRank = -numeric_limits<double>::infinity();
-		seedModels[pipelineIdx].seedLength = seedLength;
-		seedModels[pipelineIdx].sampleNum = sampleNum;
-	}
+		 SeedModel *seedModel ) {
+	seedModel->valid = false;
+	seedModel->seedRank = -numeric_limits<double>::infinity();
+	seedModel->seedLength = seedLength;
+	seedModel->sampleNum = sampleNum;
 
 	size_t positionNum = dataset->sequenceLength - seedLength + 1;
 	for ( uint32_t code = 0; code < seedSupport.size(); code ++ ) {
@@ -191,26 +189,19 @@ void selectSeeds( const Dataset *dataset,
 		double variance = (double)sampleNum * sequenceProbability * (1.0 - sequenceProbability);
 		double rank = ((double)seedSupport[code] - expectedSupport) / sqrt(variance + 1.0e-12);
 
-		for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
-			const SeedModel &currentSeed = seedModels[pipelineIdx];
-			bool better = false;
-			if ( currentSeed.valid == false || rank > currentSeed.seedRank ) better = true;
-			else if ( rank == currentSeed.seedRank && seedSupport[code] > currentSeed.seedSupport ) better = true;
-			else if ( rank == currentSeed.seedRank && seedSupport[code] == currentSeed.seedSupport &&
-				  code < currentSeed.seedCode ) better = true;
-			if ( better == false ) continue;
+		bool better = false;
+		if ( seedModel->valid == false || rank > seedModel->seedRank ) better = true;
+		else if ( rank == seedModel->seedRank && seedSupport[code] > seedModel->seedSupport ) better = true;
+		else if ( rank == seedModel->seedRank && seedSupport[code] == seedModel->seedSupport &&
+			  code < seedModel->seedCode ) better = true;
 
-			for ( size_t moveIdx = seedModels.size() - 1; moveIdx > pipelineIdx; moveIdx -- ) {
-				seedModels[moveIdx] = seedModels[moveIdx - 1];
-			}
-			SeedModel &selectedSeed = seedModels[pipelineIdx];
-			selectedSeed.valid = true;
-			selectedSeed.seedCode = code;
-			selectedSeed.seedString = decodeKmer(code, seedLength, dataset);
-			selectedSeed.seedSupport = seedSupport[code];
-			selectedSeed.seedExpectedSupport = expectedSupport;
-			selectedSeed.seedRank = rank;
-			break;
+		if ( better ) {
+			seedModel->valid = true;
+			seedModel->seedCode = code;
+			seedModel->seedString = decodeKmer(code, seedLength, dataset);
+			seedModel->seedSupport = seedSupport[code];
+			seedModel->seedExpectedSupport = expectedSupport;
+			seedModel->seedRank = rank;
 		}
 	}
 }
@@ -329,7 +320,7 @@ void buildGuidedOffsets( const Config *config, const Dataset *dataset, SeedModel
 	}
 }
 
-// Construct per-pipeline seed models using one shared set of statistics
+// Construct one seed model and distribute it to all pipelines
 void buildSeedModels( const Config *config,
 		      const Dataset *dataset,
 		      vector<SeedModel> &seedModels ) {
@@ -351,15 +342,15 @@ void buildSeedModels( const Config *config,
 				     seedSupport,
 				     seedValid,
 				     &markovModel);
-	selectSeeds(dataset,
+	SeedModel sharedSeed = {};
+	selectSeed(dataset,
 		   sampleNum,
 		   seedLength,
 		   seedSupport,
 		   seedValid,
 		   &markovModel,
-		   seedModels);
-	for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
-		selectAnchor(config, dataset, &seedModels[pipelineIdx]);
-		buildGuidedOffsets(config, dataset, &seedModels[pipelineIdx]);
-	}
+		   &sharedSeed);
+	selectAnchor(config, dataset, &sharedSeed);
+	buildGuidedOffsets(config, dataset, &sharedSeed);
+	seedModels.assign((size_t)NUMPIPELINE, sharedSeed);
 }
