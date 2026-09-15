@@ -13,6 +13,9 @@ $(TARGET): $(SOURCES) $(HEADERS)
 
 test: $(TARGET)
 	bash test/run_test.sh
+	mkdir -p test/output
+	$(CXX) $(CXXFLAGS) -I. test/refinement_optimization_test.cpp $(filter-out main.cpp,$(SOURCES)) -o test/output/refinement_optimization_test
+	./test/output/refinement_optimization_test
 
 clean:
 	rm -f $(TARGET)

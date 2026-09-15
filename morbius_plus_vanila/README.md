@@ -106,6 +106,25 @@ ranking, deduplication or the `--motif-count` limit:
    all sequences on each iteration, allowing previously excluded sequences to
    return. Stop on non-improvement, lack of support, or 20 proposals.
 
+Refinement candidates run independently within the existing `--threads` budget
+(default: 16, capped at 16 and the candidate count). Workers take the next
+unprocessed candidate when ready, but results remain in pipeline-index order.
+Gibbs sampling finishes before refinement workers start.
+
+Before processing candidates, the program caches each Primary and Control
+window's background log-probability on both strands and builds the Fisher
+log-factorial table once. All candidates and iterations share these read-only
+tables. Background scores remain `double`, Fisher arithmetic remains
+`long double`, and the original accumulation and score-tie rules are unchanged.
+The background cache uses two doubles per legal offset across Primary and
+Control, plus sequence-start indices; it is allocated once, not per worker.
+Cache construction is included in the existing refinement timer.
+
+A proposed PWM that is exactly equal to the current PWM skips the redundant
+rescan and stops with the existing `no_improvement` reason and proposal count.
+There is no approximate equality threshold or candidate pruning. All 16
+candidates remain eligible, and the maximum remains **20 proposals**.
+
 The accepted PWM and the sites that actually constructed it are saved together.
 Its subsequently evaluated best sites can differ from those fitting sites, so
 the two cutoffs, hit counts and p-values are recorded separately. If no proposal
@@ -173,7 +192,10 @@ The seed fields in the summary and console describe the first reported motif's p
 
 ## Test
 
-Tests require Python 3 in addition to the C++ build tools.
+Tests require Python 3 in addition to the C++ build tools. The refinement
+optimization regression compares cached, parallel execution with the original
+uncached serial procedure, including exact PWM counts, site masks, positions,
+strands, enrichment values, and termination diagnostics.
 
 ```bash
 make test

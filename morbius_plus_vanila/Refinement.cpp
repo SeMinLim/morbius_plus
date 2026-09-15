@@ -1,9 +1,12 @@
 #include "Refinement.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 
 namespace {
@@ -88,6 +91,12 @@ void validatePopulationSizes( size_t primaryNum, size_t controlNum ) {
 		throw std::overflow_error( "Refinement population size is too large." );
 	}
 }
+
+// One shared, immutable background score per sequence, strand, and offset.
+struct RefinementBackgroundCache {
+	std::vector<size_t> sequenceStart;
+	std::vector<double> logProbability;
+};
 
 struct ScoredSequence {
 	double score;
@@ -209,6 +218,88 @@ void scanRefinementSites( const Config *config, const Dataset *dataset,
 }
 
 
+namespace {
+
+void buildRefinementBackgroundCache( const Config *config, const Dataset *dataset,
+		const RefinementBackground *background, RefinementBackgroundCache *cache ) {
+	if ( config->alphabetMode != ALPHABET_DNA || dataset->alphabetSize != 4 ||
+		config->motifLength == 0 || config->motifLength > dataset->sequenceLength ) {
+		throw std::invalid_argument( "Invalid DNA sequence length for refinement cache." );
+	}
+	if ( dataset->sequences.size() >= cache->sequenceStart.max_size() ) {
+		throw std::length_error( "Too many sequences for the refinement cache." );
+	}
+	cache->sequenceStart.resize( dataset->sequences.size() + 1 );
+	size_t scoreNum = 0;
+	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+		size_t length = dataset->sequences[seqIdx].size();
+		if ( length < config->motifLength || length - config->motifLength > UINT32_MAX ) {
+			throw std::invalid_argument( "Invalid sequence length for refinement site offsets." );
+		}
+		size_t offsetNum = length - config->motifLength + 1;
+		if ( offsetNum > (cache->logProbability.max_size() - scoreNum) / 2 ) {
+			throw std::length_error( "Refinement background cache is too large." );
+		}
+		cache->sequenceStart[seqIdx] = scoreNum;
+		scoreNum += 2 * offsetNum;
+	}
+	cache->sequenceStart[dataset->sequences.size()] = scoreNum;
+	cache->logProbability.resize( scoreNum );
+	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+		const std::string &sequence = dataset->sequences[seqIdx];
+		size_t scoreIdx = cache->sequenceStart[seqIdx];
+		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_REVERSE; strand ++ ) {
+			for ( size_t offset = 0; offset <= sequence.size() - config->motifLength; offset ++ ) {
+				cache->logProbability[scoreIdx] = calculateRefinementBackgroundLogProbability(
+					config, dataset, background, sequence, (uint32_t)offset, strand );
+				scoreIdx ++;
+			}
+		}
+	}
+}
+
+void scanCachedRefinementSites( const Config *config, const Dataset *dataset,
+		const RefinementBackgroundCache *cache, const std::vector<double> &pwm,
+		std::vector<RefinementSite> &sites ) {
+	if ( pwm.size() != 4 * config->motifLength ) {
+		throw std::invalid_argument( "Invalid DNA PWM or sequence length for refinement." );
+	}
+	std::vector<double> logPWM( pwm.size() );
+	for ( size_t idx = 0; idx < pwm.size(); idx ++ ) {
+		if ( !std::isfinite( pwm[idx] ) || pwm[idx] < 0.0 ) {
+			throw std::invalid_argument( "Refinement PWM probabilities must be finite and nonnegative." );
+		}
+		logPWM[idx] = pwm[idx] == 0.0 ? -std::numeric_limits<double>::infinity() : std::log2( pwm[idx] );
+	}
+	sites.resize( dataset->sequences.size() );
+	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+		const std::string &sequence = dataset->sequences[seqIdx];
+		size_t scoreIdx = cache->sequenceStart[seqIdx];
+		RefinementSite best = { -std::numeric_limits<double>::infinity(), 0, STRAND_FORWARD };
+		// Keep the original sum order and ties: forward strand, then lowest offset.
+		for ( uint8_t strand = STRAND_FORWARD; strand <= STRAND_REVERSE; strand ++ ) {
+			for ( size_t offset = 0; offset <= sequence.size() - config->motifLength; offset ++ ) {
+				double motifLogProbability = 0.0;
+				for ( size_t column = 0; column < config->motifLength; column ++ ) {
+					int symbol = getSiteSymbol( config, dataset, sequence, offset, strand, column );
+					motifLogProbability += logPWM[symbol * config->motifLength + column];
+				}
+				double score = motifLogProbability - cache->logProbability[scoreIdx];
+				scoreIdx ++;
+				if ( score > best.score ) {
+					best.score = score;
+					best.offset = (uint32_t)offset;
+					best.strand = strand;
+				}
+			}
+		}
+		sites[seqIdx] = best;
+	}
+}
+
+}
+
+
 double fisherLogPvalue( size_t primaryHits, size_t controlHits,
 		size_t primaryNum, size_t controlNum ) {
 	if ( primaryHits > primaryNum || controlHits > controlNum ) {
@@ -220,8 +311,10 @@ double fisherLogPvalue( size_t primaryHits, size_t controlHits,
 }
 
 
-RefinementSelection selectRefinementThreshold( const std::vector<RefinementSite> &primarySites,
-		const std::vector<RefinementSite> &controlSites ) {
+namespace {
+
+RefinementSelection selectRefinementThresholdWithTable( const std::vector<RefinementSite> &primarySites,
+		const std::vector<RefinementSite> &controlSites, const FisherTable &table ) {
 	RefinementSelection best;
 	if ( primarySites.empty() || controlSites.empty() ) return best;
 	validatePopulationSizes( primarySites.size(), controlSites.size() );
@@ -241,7 +334,6 @@ RefinementSelection selectRefinementThreshold( const std::vector<RefinementSite>
 	std::sort( scores.begin(), scores.end(), []( const ScoredSequence &left, const ScoredSequence &right ) {
 		return left.score > right.score;
 	} );
-	FisherTable table( total );
 	size_t primaryHits = 0;
 	size_t controlHits = 0;
 	long double bestLogPvalue = 0.0L;
@@ -274,9 +366,9 @@ RefinementSelection selectRefinementThreshold( const std::vector<RefinementSite>
 }
 
 
-void refineMotif( const Config *config, const Dataset *primary, const Dataset *control,
-		const RefinementBackground *background, const OutputMotif &startingMotif,
-		RefinementResult *result ) {
+void refineMotifWithCache( const Config *config, const Dataset *primary, const Dataset *control,
+		const RefinementBackgroundCache *primaryCache, const RefinementBackgroundCache *controlCache,
+		const FisherTable &table, const OutputMotif &startingMotif, RefinementResult *result ) {
 	OutputMotif initial = startingMotif;
 	*result = RefinementResult{};
 	result->motif = initial;
@@ -285,9 +377,9 @@ void refineMotif( const Config *config, const Dataset *primary, const Dataset *c
 	rebuildRefinementPWM( config, result->motif, pwm );
 	std::vector<RefinementSite> primarySites;
 	std::vector<RefinementSite> controlSites;
-	scanRefinementSites( config, primary, background, pwm, primarySites );
-	scanRefinementSites( config, control, background, pwm, controlSites );
-	result->selection = selectRefinementThreshold( primarySites, controlSites );
+	scanCachedRefinementSites( config, primary, primaryCache, pwm, primarySites );
+	scanCachedRefinementSites( config, control, controlCache, pwm, controlSites );
+	result->selection = selectRefinementThresholdWithTable( primarySites, controlSites, table );
 	if ( !result->selection.valid ) {
 		result->motif.siteNum = 0;
 		result->motif.count.assign( 4 * config->motifLength, 0 );
@@ -326,12 +418,17 @@ void refineMotif( const Config *config, const Dataset *primary, const Dataset *c
 		candidate.consensus = buildConsensus( config, primary, candidate.count );
 		std::vector<double> candidatePWM;
 		rebuildRefinementPWM( config, candidate, candidatePWM );
+		// Identical PWM gives the same scan and Fisher result; preserve the old exit status.
+		if ( candidatePWM == pwm ) {
+			result->terminationReason = "no_improvement";
+			return;
+		}
 		std::vector<RefinementSite> candidatePrimarySites;
 		std::vector<RefinementSite> candidateControlSites;
-		scanRefinementSites( config, primary, background, candidatePWM, candidatePrimarySites );
-		scanRefinementSites( config, control, background, candidatePWM, candidateControlSites );
-		RefinementSelection candidateSelection = selectRefinementThreshold( candidatePrimarySites,
-			candidateControlSites );
+		scanCachedRefinementSites( config, primary, primaryCache, candidatePWM, candidatePrimarySites );
+		scanCachedRefinementSites( config, control, controlCache, candidatePWM, candidateControlSites );
+		RefinementSelection candidateSelection = selectRefinementThresholdWithTable( candidatePrimarySites,
+			candidateControlSites, table );
 		if ( !candidateSelection.valid ) {
 			result->terminationReason = "candidate_no_support";
 			return;
@@ -356,23 +453,123 @@ void refineMotif( const Config *config, const Dataset *primary, const Dataset *c
 }
 
 
+struct RefinementWork {
+	const Config *config;
+	const Dataset *primary;
+	const Dataset *control;
+	const std::vector<PipelineResult> *pipelineResults;
+	const RefinementBackgroundCache *primaryCache;
+	const RefinementBackgroundCache *controlCache;
+	const FisherTable *table;
+	std::vector<RefinementResult> *results;
+	std::vector<std::exception_ptr> *errors;
+	std::atomic<size_t> nextPipelineIdx{0};
+};
+
+// Each worker owns one candidate at a time; all shared lookup tables are read-only.
+void refinePipelineWorker( RefinementWork *work ) {
+	for ( ;; ) {
+		size_t pipelineIdx = work->nextPipelineIdx.fetch_add( 1, std::memory_order_relaxed );
+		if ( pipelineIdx >= work->pipelineResults->size() ) return;
+		try {
+			const PipelineResult &pipeline = (*work->pipelineResults)[pipelineIdx];
+			OutputMotif initial{};
+			initial.pipelineIdx = (int)pipelineIdx;
+			initial.refined = true;
+			initial.siteNum = work->primary->sequences.size();
+			initial.sitePresent.assign( work->primary->sequences.size(), 1 );
+			initial.offsets = pipeline.bestOffsets;
+			initial.strands = pipeline.bestStrands;
+			buildResultCount( work->config, work->primary, pipeline.bestOffsets,
+				pipeline.bestStrands, initial.count );
+			initial.consensus = buildConsensus( work->config, work->primary, initial.count );
+			refineMotifWithCache( work->config, work->primary, work->control,
+				work->primaryCache, work->controlCache, *work->table,
+				initial, &(*work->results)[pipelineIdx] );
+		} catch ( ... ) {
+			(*work->errors)[pipelineIdx] = std::current_exception();
+		}
+	}
+}
+
+}
+
+
+RefinementSelection selectRefinementThreshold( const std::vector<RefinementSite> &primarySites,
+		const std::vector<RefinementSite> &controlSites ) {
+	if ( primarySites.empty() || controlSites.empty() ) return RefinementSelection{};
+	validatePopulationSizes( primarySites.size(), controlSites.size() );
+	const FisherTable table( primarySites.size() + controlSites.size() );
+	return selectRefinementThresholdWithTable( primarySites, controlSites, table );
+}
+
+
+void refineMotif( const Config *config, const Dataset *primary, const Dataset *control,
+		const RefinementBackground *background, const OutputMotif &startingMotif,
+		RefinementResult *result ) {
+	validatePopulationSizes( primary->sequences.size(), control->sequences.size() );
+	const FisherTable table( primary->sequences.size() + control->sequences.size() );
+	RefinementBackgroundCache primaryCache;
+	RefinementBackgroundCache controlCache;
+	buildRefinementBackgroundCache( config, primary, background, &primaryCache );
+	buildRefinementBackgroundCache( config, control, background, &controlCache );
+	refineMotifWithCache( config, primary, control, &primaryCache, &controlCache,
+		table, startingMotif, result );
+}
+
+
 void refinePipelineMotifs( const Config *config, const Dataset *primary, const Dataset *control,
 		const std::vector<PipelineResult> &pipelineResults,
 		RefinementBackground *background, std::vector<RefinementResult> &results ) {
 	buildRefinementBackground( control, background );
 	results.clear();
 	results.resize( pipelineResults.size() );
-	for ( size_t pipelineIdx = 0; pipelineIdx < pipelineResults.size(); pipelineIdx++ ) {
-		OutputMotif initial{};
-		initial.pipelineIdx = (int)pipelineIdx;
-		initial.refined = true;
-		initial.siteNum = primary->sequences.size();
-		initial.sitePresent.assign( primary->sequences.size(), 1 );
-		initial.offsets = pipelineResults[pipelineIdx].bestOffsets;
-		initial.strands = pipelineResults[pipelineIdx].bestStrands;
-		buildResultCount( config, primary, pipelineResults[pipelineIdx].bestOffsets,
-			pipelineResults[pipelineIdx].bestStrands, initial.count );
-		initial.consensus = buildConsensus( config, primary, initial.count );
-		refineMotif( config, primary, control, background, initial, &results[pipelineIdx] );
+	if ( pipelineResults.empty() ) return;
+
+	// Build once per invocation, outside all candidate and refinement loops.
+	validatePopulationSizes( primary->sequences.size(), control->sequences.size() );
+	const FisherTable table( primary->sequences.size() + control->sequences.size() );
+	RefinementBackgroundCache primaryCache;
+	RefinementBackgroundCache controlCache;
+	buildRefinementBackgroundCache( config, primary, background, &primaryCache );
+	buildRefinementBackgroundCache( config, control, background, &controlCache );
+
+	int threadNum = config->threadNum;
+	if ( threadNum == 0 ) threadNum = NUMPIPELINE;
+	threadNum = std::max( 1, std::min( threadNum, NUMPIPELINE ) );
+	size_t workerNum = std::min( (size_t)threadNum, pipelineResults.size() );
+	std::vector<std::exception_ptr> errors( pipelineResults.size() );
+	RefinementWork work{};
+	work.config = config;
+	work.primary = primary;
+	work.control = control;
+	work.pipelineResults = &pipelineResults;
+	work.primaryCache = &primaryCache;
+	work.controlCache = &controlCache;
+	work.table = &table;
+	work.results = &results;
+	work.errors = &errors;
+	if ( workerNum == 1 ) {
+		refinePipelineWorker( &work );
+	} else {
+		std::vector<std::thread> workers;
+		workers.reserve( workerNum );
+		try {
+			for ( size_t workerIdx = 0; workerIdx < workerNum; workerIdx ++ ) {
+				workers.emplace_back( refinePipelineWorker, &work );
+			}
+		} catch ( ... ) {
+			for ( size_t workerIdx = 0; workerIdx < workers.size(); workerIdx ++ ) {
+				workers[workerIdx].join();
+			}
+			throw;
+		}
+		for ( size_t workerIdx = 0; workerIdx < workers.size(); workerIdx ++ ) {
+			workers[workerIdx].join();
+		}
+	}
+	// Propagate errors only after every worker has released the shared tables.
+	for ( size_t pipelineIdx = 0; pipelineIdx < errors.size(); pipelineIdx ++ ) {
+		if ( errors[pipelineIdx] ) std::rethrow_exception( errors[pipelineIdx] );
 	}
 }
