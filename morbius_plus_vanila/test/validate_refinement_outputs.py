@@ -118,6 +118,8 @@ def all_pipeline_table(prefix):
 
 def check_outputs(prefix, primary, control, expected_limit):
     prefix = str(prefix)
+    refinement_summary = Path(prefix + ".refinement_summary.txt").read_text()
+    assert re.search(r"^Maximum refinement iterations: 5$", refinement_summary, re.M)
     diagnostics = tsv(prefix + ".refinement.tsv")
     assert [int(row["Pipeline"]) for row in diagnostics] == list(range(16))
     fit_rows = tsv(prefix + ".refinement_sites.tsv")
@@ -139,7 +141,7 @@ def check_outputs(prefix, primary, control, expected_limit):
         rows = by_pipeline[pipeline]
         assert [int(site["SequenceIdx"]) for site in rows] == list(range(len(primary)))
         iterations = int(row["AcceptedIterations"])
-        assert 0 <= iterations <= int(row["AttemptedIterations"]) <= 20
+        assert 0 <= iterations <= int(row["AttemptedIterations"]) <= 5
         motif_id = f"MorbiusPlus_pipeline_{pipeline}"
         present = [site for site in rows if site["SitePresent"] == "1"]
         assert len(present) == int(row["PrimarySiteNum"])
