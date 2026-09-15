@@ -1,6 +1,8 @@
 #include "MorbiusPlus.h"
+#include "Refinement.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <string>
 #include <vector>
@@ -9,6 +11,7 @@ using namespace std;
 
 // Main
 int main( int argc, char **argv ) {
+	double programStartTime = timeChecker();
 	Config config;
 	parseArguments(argc, argv, &config);
 
@@ -25,6 +28,17 @@ int main( int argc, char **argv ) {
 	fflush( stdout );
 	readFASTA(config.inputFilename, &dataset);
 	validateWorkload(&config, &dataset);
+	Dataset control;
+	bool refinementEnabled = config.controlFilename.empty() == false;
+	if ( refinementEnabled ) {
+		configureAlphabet(config.alphabetMode, &control);
+		readFASTA(config.controlFilename, &control);
+		validateWorkload(&config, &control);
+		if ( control.sequenceLength != dataset.sequenceLength ) {
+			fprintf(stderr, "Fisher refinement requires the same sequence length in Primary and Control.\n");
+			return 1;
+		}
+	}
 	if ( config.maxUpdateNum == 0 ) {
 		config.maxUpdateNum = (uint64_t)DEFAULTMAXSWEEPNUM * (uint64_t)dataset.sequences.size();
 	}
@@ -63,6 +77,20 @@ int main( int argc, char **argv ) {
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
 
+	// Separate postprocessing: all Gibbs results and their RNG state remain unchanged.
+	RefinementBackground refinementBackground;
+	vector<RefinementResult> refinementResults;
+	double refinementElapsedTime = 0.0;
+	if ( refinementEnabled ) {
+		printf( "[Refinement] Refining all %lu Gibbs candidates with Primary and Control.\n",
+			(unsigned long)pipelineResults.size() );
+		fflush(stdout);
+		double refinementStartTime = timeChecker();
+		refinePipelineMotifs(&config, &dataset, &control, pipelineResults,
+			&refinementBackground, refinementResults);
+		refinementElapsedTime = timeChecker() - refinementStartTime;
+	}
+
 	//--------------------------------------------------------------------------------------------
 	// [STEP 4]
 	// Select unique output motifs and store the results
@@ -75,19 +103,31 @@ int main( int argc, char **argv ) {
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
 	vector<OutputMotif> outputMotifs;
-	selectOutputMotifs(&config, &dataset, pipelineResults, outputMotifs);
+	if ( refinementEnabled ) {
+		selectRefinedOutputMotifs(&config, pipelineResults, refinementResults, outputMotifs);
+	} else {
+		selectOutputMotifs(&config, &dataset, pipelineResults, outputMotifs);
+	}
 	createOutputDirectory(config.outputPrefix);
 	writeInitialization(&config, &dataset, seedModels, pipelineResults);
 	writeMotifFASTA(&config, &dataset, pipelineResults, outputMotifs);
 	writeOffsets(&config, &dataset, pipelineResults, outputMotifs);
 	writePWM(&config, &dataset, outputMotifs);
 	writeMEME(&config, &dataset, outputMotifs);
+	if ( refinementEnabled ) {
+		writeRefinement(&config, &dataset, &control, &refinementBackground,
+			refinementResults, outputMotifs, refinementElapsedTime);
+	}
+	// Enabled-mode time includes input, Gibbs, refinement and result-file output.
+	// As with any in-program timestamp, writing this final summary follows the measurement.
+	double elapsedTime = refinementEnabled ? timeChecker() - programStartTime :
+		seedElapsedTime + processElapsedTime;
 	writeSummary(&config,
 		     &dataset,
 		     seedModels,
 		     pipelineResults,
 		     outputMotifs,
-		     seedElapsedTime + processElapsedTime);
+		     elapsedTime);
 	if ( config.outputMotifNum == 1 ) {
 		printf( "[STEP 4] Selecting and storing the best result is done!\n" );
 	} else {
@@ -101,7 +141,7 @@ int main( int argc, char **argv ) {
 		    seedModels,
 		    pipelineResults,
 		    outputMotifs,
-		    seedElapsedTime + processElapsedTime);
+		    elapsedTime);
 
 	return 0;
 }

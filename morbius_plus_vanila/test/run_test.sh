@@ -171,4 +171,15 @@ python3 "$ROOT_DIR/test/validate_strand_outputs.py" "$ROOT_DIR/test/DNA_TEST.fas
 python3 "$ROOT_DIR/test/validate_strand_outputs.py" "$ROOT_DIR/test/DNA_BOTH_STRANDS_TEST.fasta" \
 	"$OUTPUT_DIR/both_strands_result" --exact-pair
 
+"${CXX:-g++}" -O2 -std=c++17 -Wall -Wextra -pedantic -pthread \
+	-I "$ROOT_DIR" \
+	"$ROOT_DIR/test/refinement_test.cpp" \
+	"$ROOT_DIR/Utility.cpp" "$ROOT_DIR/SeedInitialization.cpp" \
+	"$ROOT_DIR/GibbsPipeline.cpp" "$ROOT_DIR/Result.cpp" \
+	"$ROOT_DIR/Refinement.cpp" "$ROOT_DIR/RefinementOutput.cpp" \
+	-o "$OUTPUT_DIR/refinement_test"
+"$OUTPUT_DIR/refinement_test" > "$OUTPUT_DIR/refinement_test.stdout.txt"
+python3 "$ROOT_DIR/test/validate_refinement_outputs.py" "$ROOT_DIR/morbius_plus_vanila" \
+	"$OUTPUT_DIR/refinement"
+
 printf "All Morbius+ vanilla tests passed.\n"

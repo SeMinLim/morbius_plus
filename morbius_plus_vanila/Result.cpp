@@ -3,11 +3,34 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
 #include <vector>
 using namespace std;
+
+static size_t outputSiteNum( const Dataset *dataset, const OutputMotif &motif ) {
+	return motif.refined ? motif.siteNum : dataset->sequences.size();
+}
+
+static const vector<uint32_t> &outputOffsets( const vector<PipelineResult> &results,
+					     const OutputMotif &motif ) {
+	return motif.refined ? motif.offsets : results[motif.pipelineIdx].bestOffsets;
+}
+
+static const vector<uint8_t> &outputStrands( const vector<PipelineResult> &results,
+					   const OutputMotif &motif ) {
+	return motif.refined ? motif.strands : results[motif.pipelineIdx].bestStrands;
+}
+
+static void closeOutput( ofstream &outputFile, const string &filename ) {
+	outputFile.close();
+	if ( outputFile.fail() ) {
+		printf( "Unable to write output file: %s\n", filename.c_str() );
+		exit(1);
+	}
+}
 
 
 // Build result counts without pseudocount
@@ -212,11 +235,12 @@ void writeMotifFASTA( const Config *config,
 		exit(1);
 	}
 
-	if ( config->outputMotifNum == 1 ) {
-		const PipelineResult &pipelineResult = pipelineResults[outputMotifs[0].pipelineIdx];
-		const vector<uint32_t> &offsets = pipelineResult.bestOffsets;
-		const vector<uint8_t> &strands = pipelineResult.bestStrands;
+	if ( config->outputMotifNum == 1 && outputMotifs.empty() == false ) {
+		const OutputMotif &motif = outputMotifs[0];
+		const vector<uint32_t> &offsets = outputOffsets(pipelineResults, motif);
+		const vector<uint8_t> &strands = outputStrands(pipelineResults, motif);
 		for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+			if ( motif.refined && motif.sitePresent[seqIdx] == 0 ) continue;
 			outputFile << ">" << dataset->names[seqIdx] << " offset=" << offsets[seqIdx];
 			if ( config->alphabetMode == ALPHABET_DNA ) {
 				outputFile << " strand=" << (strands[seqIdx] == STRAND_REVERSE ? '-' : '+');
@@ -227,10 +251,12 @@ void writeMotifFASTA( const Config *config,
 		}
 	} else {
 		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
-			int pipelineIdx = outputMotifs[motifIdx].pipelineIdx;
-			const vector<uint32_t> &offsets = pipelineResults[pipelineIdx].bestOffsets;
-			const vector<uint8_t> &strands = pipelineResults[pipelineIdx].bestStrands;
+			const OutputMotif &motif = outputMotifs[motifIdx];
+			int pipelineIdx = motif.pipelineIdx;
+			const vector<uint32_t> &offsets = outputOffsets(pipelineResults, motif);
+			const vector<uint8_t> &strands = outputStrands(pipelineResults, motif);
 			for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+				if ( motif.refined && motif.sitePresent[seqIdx] == 0 ) continue;
 				outputFile << ">MorbiusPlus_" << motifIdx + 1 << "|" << seqIdx
 					   << " motif_rank=" << motifIdx + 1
 					   << " pipeline=" << pipelineIdx
@@ -244,7 +270,7 @@ void writeMotifFASTA( const Config *config,
 			}
 		}
 	}
-	outputFile.close();
+	closeOutput(outputFile, filename);
 }
 
 // Write sequence offsets
@@ -260,13 +286,18 @@ void writeOffsets( const Config *config,
 	}
 
 	if ( config->outputMotifNum == 1 ) {
-		const PipelineResult &pipelineResult = pipelineResults[outputMotifs[0].pipelineIdx];
-		const vector<uint32_t> &offsets = pipelineResult.bestOffsets;
-		const vector<uint8_t> &strands = pipelineResult.bestStrands;
 		outputFile << "SequenceIdx\tSequenceName\tOffset";
 		if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "\tStrand";
 		outputFile << "\tMotif\n";
+		if ( outputMotifs.empty() ) {
+			closeOutput(outputFile, filename);
+			return;
+		}
+		const OutputMotif &motif = outputMotifs[0];
+		const vector<uint32_t> &offsets = outputOffsets(pipelineResults, motif);
+		const vector<uint8_t> &strands = outputStrands(pipelineResults, motif);
 		for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+			if ( motif.refined && motif.sitePresent[seqIdx] == 0 ) continue;
 			outputFile << seqIdx << "\t"
 				   << dataset->names[seqIdx] << "\t"
 				   << offsets[seqIdx] << "\t";
@@ -281,10 +312,12 @@ void writeOffsets( const Config *config,
 		if ( config->alphabetMode == ALPHABET_DNA ) outputFile << "\tStrand";
 		outputFile << "\tMotif\n";
 		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
-			int pipelineIdx = outputMotifs[motifIdx].pipelineIdx;
-			const vector<uint32_t> &offsets = pipelineResults[pipelineIdx].bestOffsets;
-			const vector<uint8_t> &strands = pipelineResults[pipelineIdx].bestStrands;
+			const OutputMotif &motif = outputMotifs[motifIdx];
+			int pipelineIdx = motif.pipelineIdx;
+			const vector<uint32_t> &offsets = outputOffsets(pipelineResults, motif);
+			const vector<uint8_t> &strands = outputStrands(pipelineResults, motif);
 			for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+				if ( motif.refined && motif.sitePresent[seqIdx] == 0 ) continue;
 				outputFile << motifIdx + 1 << "\t"
 					   << pipelineIdx << "\t"
 					   << seqIdx << "\t"
@@ -298,7 +331,7 @@ void writeOffsets( const Config *config,
 			}
 		}
 	}
-	outputFile.close();
+	closeOutput(outputFile, filename);
 }
 
 // Write a PWM table
@@ -311,9 +344,8 @@ void writePWM( const Config *config,
 		printf( "Unable to create output file: %s\n", filename.c_str() );
 		exit(1);
 	}
+	if ( config->controlFilename.empty() == false ) outputFile << setprecision(17);
 
-	double denominator = (double)dataset->sequences.size() +
-			     (double)dataset->alphabetSize * PSEUDOCOUNT;
 	if ( config->outputMotifNum == 1 ) {
 		outputFile << "Position";
 		for ( int symbol = 0; symbol < dataset->alphabetSize; symbol ++ ) {
@@ -321,6 +353,12 @@ void writePWM( const Config *config,
 		}
 		outputFile << "\n";
 
+		if ( outputMotifs.empty() ) {
+			closeOutput(outputFile, filename);
+			return;
+		}
+		double denominator = (double)outputSiteNum(dataset, outputMotifs[0]) +
+				     (double)dataset->alphabetSize * PSEUDOCOUNT;
 		const vector<uint32_t> &count = outputMotifs[0].count;
 		for ( size_t column = 0; column < config->motifLength; column ++ ) {
 			outputFile << column;
@@ -340,6 +378,8 @@ void writePWM( const Config *config,
 		outputFile << "\n";
 
 		for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+			double denominator = (double)outputSiteNum(dataset, outputMotifs[motifIdx]) +
+					     (double)dataset->alphabetSize * PSEUDOCOUNT;
 			const vector<uint32_t> &count = outputMotifs[motifIdx].count;
 			for ( size_t column = 0; column < config->motifLength; column ++ ) {
 				outputFile << motifIdx + 1 << "\t"
@@ -355,7 +395,7 @@ void writePWM( const Config *config,
 			}
 		}
 	}
-	outputFile.close();
+	closeOutput(outputFile, filename);
 }
 
 // Write a MEME-format motif
@@ -368,6 +408,7 @@ void writeMEME( const Config *config,
 		printf( "Unable to create output file: %s\n", filename.c_str() );
 		exit(1);
 	}
+	if ( config->controlFilename.empty() == false ) outputFile << setprecision(17);
 
 	outputFile << "MEME version 4\n\n";
 	outputFile << "ALPHABET= " << dataset->alphabet << "\n\n";
@@ -378,14 +419,14 @@ void writeMEME( const Config *config,
 		if ( symbol + 1 < dataset->alphabetSize ) outputFile << " ";
 	}
 	outputFile << "\n\n";
-	double denominator = (double)dataset->sequences.size() +
-			     (double)dataset->alphabetSize * PSEUDOCOUNT;
 	for ( size_t motifIdx = 0; motifIdx < outputMotifs.size(); motifIdx ++ ) {
+		size_t siteNum = outputSiteNum(dataset, outputMotifs[motifIdx]);
+		double denominator = (double)siteNum + (double)dataset->alphabetSize * PSEUDOCOUNT;
 		if ( config->outputMotifNum == 1 ) outputFile << "MOTIF MorbiusPlus\n";
 		else outputFile << "MOTIF MorbiusPlus_" << motifIdx + 1 << "\n";
 		outputFile << "letter-probability matrix: alength= " << dataset->alphabetSize
 			   << " w= " << config->motifLength
-			   << " nsites= " << dataset->sequences.size()
+			   << " nsites= " << siteNum
 			   << " E= 0\n";
 
 		const vector<uint32_t> &count = outputMotifs[motifIdx].count;
@@ -401,7 +442,7 @@ void writeMEME( const Config *config,
 		}
 		if ( motifIdx + 1 < outputMotifs.size() ) outputFile << "\n";
 	}
-	outputFile.close();
+	closeOutput(outputFile, filename);
 }
 
 // Write a result summary
@@ -418,25 +459,32 @@ void writeSummary( const Config *config,
 		exit(1);
 	}
 
-	const SeedModel *seedModel = &seedModels[outputMotifs[0].pipelineIdx];
 	outputFile << "Input File              : " << config->inputFilename << "\n";
 	outputFile << "Alphabet                : " << (config->alphabetMode == ALPHABET_DNA ? "DNA" : "Protein") << "\n";
 	outputFile << "Sequence Number          : " << dataset->sequences.size() << "\n";
 	outputFile << "Sequence Length          : " << dataset->sequenceLength << "\n";
 	outputFile << "Motif Length             : " << config->motifLength << "\n";
-	outputFile << "SampleNum                : " << seedModel->sampleNum << "\n";
-	outputFile << "Seed Pipeline            : " << outputMotifs[0].pipelineIdx << "\n";
-	outputFile << "Seed Valid               : " << (seedModel->valid ? "Yes" : "No") << "\n";
-	if ( seedModel->valid ) {
-		outputFile << "Selected Seed            : " << seedModel->seedString << "\n";
-		outputFile << "Seed Support             : " << seedModel->seedSupport << "\n";
-		outputFile << "Expected Seed Support    : " << seedModel->seedExpectedSupport << "\n";
-		outputFile << "Seed Rank                : " << seedModel->seedRank << "\n";
-		outputFile << "Anchor Offset            : " << seedModel->anchorOffset << "\n";
-		outputFile << "Anchor Rank              : " << seedModel->anchorRank << "\n";
+	if ( outputMotifs.empty() == false ) {
+		const SeedModel *seedModel = &seedModels[outputMotifs[0].pipelineIdx];
+		outputFile << "SampleNum                : " << seedModel->sampleNum << "\n";
+		outputFile << "Seed Pipeline            : " << outputMotifs[0].pipelineIdx << "\n";
+		outputFile << "Seed Valid               : " << (seedModel->valid ? "Yes" : "No") << "\n";
+		if ( seedModel->valid ) {
+			outputFile << "Selected Seed            : " << seedModel->seedString << "\n";
+			outputFile << "Seed Support             : " << seedModel->seedSupport << "\n";
+			outputFile << "Expected Seed Support    : " << seedModel->seedExpectedSupport << "\n";
+			outputFile << "Seed Rank                : " << seedModel->seedRank << "\n";
+			outputFile << "Anchor Offset            : " << seedModel->anchorOffset << "\n";
+			outputFile << "Anchor Rank              : " << seedModel->anchorRank << "\n";
+		}
 	}
 	outputFile << "Pipeline Number          : " << NUMPIPELINE << "\n";
-	if ( config->outputMotifNum == 1 ) {
+	if ( config->controlFilename.empty() == false ) {
+		outputFile << "Refinement               : Separate post-Gibbs Primary/Control enrichment\n";
+		outputFile << "Best Score Meaning       : Original Gibbs agreement score (all Primary sequences)\n";
+		outputFile << "Elapsed Time Includes    : Input, seed initialization, Gibbs, refinement, and result output before summary\n";
+	}
+	if ( config->outputMotifNum == 1 && outputMotifs.empty() == false ) {
 		const OutputMotif &outputMotif = outputMotifs[0];
 		const PipelineResult &bestResult = pipelineResults[outputMotif.pipelineIdx];
 		outputFile << "Selected Pipeline        : " << outputMotif.pipelineIdx << "\n";
@@ -447,6 +495,7 @@ void writeSummary( const Config *config,
 		outputFile << "Pipeline Update Number   : " << bestResult.updateNum << "\n";
 		outputFile << "Threshold Reached        : " << (bestResult.thresholdReached ? "Yes" : "No") << "\n";
 		outputFile << "Consensus Subsequence    : " << outputMotif.consensus << "\n";
+		if ( outputMotif.refined ) outputFile << "Refined Site Number      : " << outputMotif.siteNum << "\n";
 	} else {
 		outputFile << "Score Threshold          : " << config->scoreThreshold << "\n";
 		outputFile << "Requested Motif Number   : " << config->outputMotifNum << "\n";
@@ -464,6 +513,7 @@ void writeSummary( const Config *config,
 			outputFile << "Threshold Reached        : "
 				   << (pipelineResult.thresholdReached ? "Yes" : "No") << "\n";
 			outputFile << "Consensus Subsequence    : " << outputMotif.consensus << "\n";
+			if ( outputMotif.refined ) outputFile << "Refined Site Number      : " << outputMotif.siteNum << "\n";
 		}
 	}
 	outputFile << "Elapsed Time             : " << elapsedTime << " seconds\n";
@@ -482,7 +532,7 @@ void writeSummary( const Config *config,
 				   << (pipelineResult.thresholdReached ? "threshold" : "max_updates") << "\n";
 		}
 	}
-	outputFile.close();
+	closeOutput(outputFile, filename);
 }
 
 // Print the final result
@@ -492,22 +542,28 @@ void printResult( const Config *config,
 		  const vector<PipelineResult> &pipelineResults,
 		  const vector<OutputMotif> &outputMotifs,
 		  double elapsedTime ) {
-	const SeedModel *seedModel = &seedModels[outputMotifs[0].pipelineIdx];
 	printf( "---------------------------------------------------------------------\n" );
 	printf( "MORBIUS+ RESULT\n" );
 	printf( "---------------------------------------------------------------------\n" );
 	printf( "The Number of Sequence : %lu\n", (unsigned long)dataset->sequences.size() );
 	printf( "The Length of Sequence : %lu\n", (unsigned long)dataset->sequenceLength );
 	printf( "The Length of Motif    : %lu\n", (unsigned long)config->motifLength );
-	printf( "SampleNum              : %lu\n", (unsigned long)seedModel->sampleNum );
-	printf( "Seed Pipeline          : %d\n", outputMotifs[0].pipelineIdx );
-	if ( seedModel->valid ) {
-		printf( "Selected Seed          : %s\n", seedModel->seedString.c_str() );
-		printf( "Anchor Offset          : %lu\n", (unsigned long)seedModel->anchorOffset );
-	} else {
-		printf( "Selected Seed          : None\n" );
+	if ( outputMotifs.empty() == false ) {
+		const SeedModel *seedModel = &seedModels[outputMotifs[0].pipelineIdx];
+		printf( "SampleNum              : %lu\n", (unsigned long)seedModel->sampleNum );
+		printf( "Seed Pipeline          : %d\n", outputMotifs[0].pipelineIdx );
+		if ( seedModel->valid ) {
+			printf( "Selected Seed          : %s\n", seedModel->seedString.c_str() );
+			printf( "Anchor Offset          : %lu\n", (unsigned long)seedModel->anchorOffset );
+		} else {
+			printf( "Selected Seed          : None\n" );
+		}
 	}
-	if ( config->outputMotifNum == 1 ) {
+	if ( config->controlFilename.empty() == false ) {
+		printf( "Refinement             : Separate post-Gibbs Primary/Control enrichment\n" );
+		printf( "Best Score Meaning     : Original Gibbs agreement score (all Primary sequences)\n" );
+	}
+	if ( config->outputMotifNum == 1 && outputMotifs.empty() == false ) {
 		const OutputMotif &outputMotif = outputMotifs[0];
 		const PipelineResult &bestResult = pipelineResults[outputMotif.pipelineIdx];
 		printf( "Selected Pipeline      : %d\n", outputMotif.pipelineIdx );
@@ -516,6 +572,7 @@ void printResult( const Config *config,
 			calculateNormalizedScore(config, dataset, bestResult.bestScore) );
 		printf( "Pipeline Updates       : %lu\n", (unsigned long)bestResult.updateNum );
 		printf( "Consensus Subsequence  : %s\n", outputMotif.consensus.c_str() );
+		if ( outputMotif.refined ) printf( "Refined Site Number    : %lu\n", (unsigned long)outputMotif.siteNum );
 	} else {
 		printf( "Requested Motifs       : %lu\n", (unsigned long)config->outputMotifNum );
 		printf( "Reported Motifs        : %lu\n", (unsigned long)outputMotifs.size() );
@@ -529,6 +586,7 @@ void printResult( const Config *config,
 				calculateNormalizedScore(config, dataset, pipelineResult.bestScore) );
 			printf( "Pipeline Updates       : %lu\n", (unsigned long)pipelineResult.updateNum );
 			printf( "Consensus Subsequence  : %s\n", outputMotif.consensus.c_str() );
+			if ( outputMotif.refined ) printf( "Refined Site Number    : %lu\n", (unsigned long)outputMotif.siteNum );
 		}
 	}
 	printf( "Elapsed Time           : %.8f\n", elapsedTime );

@@ -62,6 +62,94 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 - `--score-threshold <F>`: normalized Overall Consensus Agreement Score threshold in `[0, 1]`
 - `--seed <N>`: random seed
 - `--threads <N>`: number of concurrent CPU threads
+- `--control <FASTA>`: enable the DNA refinement described below
+
+## Optional DNA refinement
+
+```bash
+./morbius_plus_vanila \
+    --input primary.fasta --control control.fasta \
+    --output result/refined --alphabet dna \
+    --motif-length 10 --motif-count 16 \
+    --score-threshold 0.80 --seed 1
+```
+
+This is a separate, STREME-inspired refinement of the completed Gibbs candidates.
+It does not add an absent-site state to the Gibbs sampler. All 16 pipelines retain
+the same seeds, anchors, initial offsets, RNG streams, joint strand sampling,
+agreement score and termination rules. The default Gibbs agreement threshold is
+still **0.80**. Without `--control`, the existing DNA and protein behavior is
+preserved. Control-based refinement currently requires DNA and the same fixed
+sequence length in Primary and Control; their sequence counts may differ.
+
+The following operations are applied to every pipeline candidate before output
+ranking, deduplication or the `--motif-count` limit:
+
+1. Build one second-order Markov background from all Control sequences and reuse
+   it across candidates. Tuple counts include both orientations; the prior for
+   each length-`k` tuple is `1 / 4^k`. A window uses only its own preceding bases
+   as context, with order 0 and 1 at its first two positions.
+2. Scan every Primary and Control sequence on both strands for its best
+   `log2(P(window | PWM) / P(window | background))` site. Ties prefer the forward
+   strand, then the lowest original offset. Each original sequence contributes
+   at most one hit to the enrichment table.
+3. Search positive site-score cutoffs, admitting all Primary and Control scores
+   tied at a cutoff together. A passing site has `score >= cutoff`. Among
+   Primary-enriched cutoffs, choose the smallest one-sided Fisher exact p-value;
+   ties retain the higher cutoff. This site-score cutoff is independent of the
+   Gibbs agreement threshold. No reference motifs are used.
+4. Form a proposed PWM using only the passing Primary sites, with counts in their
+   selected orientations. Control sites do not enter the PWM. For `M` fitting
+   sites, each DNA probability is `(count + 1) / (M + 4)`.
+5. Rescan the proposed PWM and optimize its enrichment cutoff again. Accept it
+   only if its enrichment p-value strictly improves the current best PWM. Rescan
+   all sequences on each iteration, allowing previously excluded sequences to
+   return. Stop on non-improvement, lack of support, or 20 proposals.
+
+The accepted PWM and the sites that actually constructed it are saved together.
+Its subsequently evaluated best sites can differ from those fitting sites, so
+the two cutoffs, hit counts and p-values are recorded separately. If no proposal
+improves a supported initial Gibbs PWM, that original fit is retained and marked
+as such. A candidate without an enriched positive-score cutoff is not reported;
+if none of the 16 candidates has support, output files contain no motif and the
+summary reports zero. No all-sequence fallback is used for unsupported candidates.
+
+Final ordering continues to use the original Gibbs best score and pipeline-index
+tie break. Exact duplicate **smoothed PWMs** are removed, comparing denominators
+as well as counts when fitting site numbers differ. The Gibbs score is not
+renormalized using the smaller fitting set. FASTA and offsets output include
+only fitting sites, and PWM/MEME denominators and MEME `nsites` use their actual
+number. Original sequence coordinates and selected strand are retained.
+
+Additional files record all candidates, including ones removed by the final
+output limit or deduplication:
+
+- `.refinement.tsv`: evaluated and fitting statistics, iteration counts and stop reasons
+- `.refinement_sites.tsv`: per-candidate, per-Primary presence flags and fitting coordinates
+- `.refinement_candidates.meme`: all supported final candidate PWMs
+- `.refinement_scoring.meme`: preceding PWMs used to select the accepted fitting sites
+- `.refinement_background.tsv`: Control-derived conditional background probabilities
+- `.refinement_summary.txt`: refinement settings, timing and interpretation
+
+The retained initial Gibbs fit has no preceding refinement fitting PWM. The
+metadata distinguishes that case from accepted refinement. The original
+`.seeds.tsv`, `.initial_offsets.tsv` and summary's `[All Pipelines]` table continue
+to describe Gibbs alone.
+
+All MEME exports retain the same uniform letter-frequency header as the existing
+evaluation output, so default Tomtom scoring uses the same convention for a motif
+in `.meme` and `.refinement_candidates.meme`. Refinement itself uses the full
+Control Markov model recorded in `.refinement_background.tsv`.
+
+The method follows the sequence-level enrichment principle of
+[STREME refinement](https://meme-suite.org/meme/doc/streme.html), while retaining
+Morbius+'s pseudocount 1, pipeline candidates and output ranking; it is not a
+reimplementation of all STREME estimation and search procedures. Refinement adds
+background construction, repeated scanning and output work. With `--control`,
+the reported elapsed time includes input reading, Gibbs, refinement and result
+file writes up to the final summary timestamp. For a complete end-to-end benchmark,
+measure the whole process externally, including its final summary/console writes;
+Tomtom evaluation is a separate process and is excluded.
 
 ## Outputs
 

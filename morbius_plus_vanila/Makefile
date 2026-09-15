@@ -3,8 +3,8 @@
 CXX := g++
 CXXFLAGS := -O3 -std=c++17 -Wall -Wextra -pedantic -pthread
 TARGET := morbius_plus_vanila
-SOURCES := main.cpp Utility.cpp SeedInitialization.cpp GibbsPipeline.cpp Result.cpp
-HEADERS := MorbiusPlus.h
+SOURCES := main.cpp Utility.cpp SeedInitialization.cpp GibbsPipeline.cpp Result.cpp Refinement.cpp RefinementOutput.cpp
+HEADERS := MorbiusPlus.h Refinement.h
 
 all: $(TARGET)
 

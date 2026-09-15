@@ -30,6 +30,7 @@
 
 typedef struct Config {
 	std::string inputFilename;
+	std::string controlFilename;
 	std::string outputPrefix;
 	int alphabetMode;
 	size_t motifLength;
@@ -115,6 +116,12 @@ typedef struct OutputMotif {
 	int pipelineIdx;
 	std::vector<uint32_t> count;
 	std::string consensus;
+	// Populated only by optional post-Gibbs DNA refinement.
+	bool refined = false;
+	size_t siteNum = 0;
+	std::vector<uint8_t> sitePresent;
+	std::vector<uint32_t> offsets;
+	std::vector<uint8_t> strands;
 }OutputMotif;
 
 // Offsets always address the leftmost base of the original sequence window.

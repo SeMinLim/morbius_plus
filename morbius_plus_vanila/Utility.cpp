@@ -87,6 +87,7 @@ void printUsage( const char *programName ) {
 	printf( "Usage: %s --input <FASTA> --output <PREFIX> --alphabet <dna|protein> --motif-length <N> [Options]\n", programName );
 	printf( "\n" );
 	printf( "Options:\n" );
+	printf( "  --control <FASTA>     Enable post-Gibbs DNA ZOOPS refinement with matched-length Control\n" );
 	printf( "  --motif-count <N>      Top unique motifs to output [default: %d; at most %d available]\n",
 		DEFAULTOUTPUTMOTIFNUM,
 		NUMPIPELINE
@@ -138,6 +139,8 @@ void parseArguments( int argc, char **argv, Config *config ) {
 	for ( int i = 1; i < argc; i ++ ) {
 		if ( string(argv[i]) == "--input" && i + 1 < argc ) {
 			config->inputFilename = argv[++i];
+		} else if ( string(argv[i]) == "--control" && i + 1 < argc ) {
+			config->controlFilename = argv[++i];
 		} else if ( string(argv[i]) == "--output" && i + 1 < argc ) {
 			config->outputPrefix = argv[++i];
 		} else if ( string(argv[i]) == "--alphabet" && i + 1 < argc ) {
@@ -181,6 +184,10 @@ void parseArguments( int argc, char **argv, Config *config ) {
 	}
 	if ( config->outputMotifNum == 0 ) {
 		printf( "The motif count must be at least 1.\n" );
+		exit(1);
+	}
+	if ( config->controlFilename.empty() == false && config->alphabetMode != ALPHABET_DNA ) {
+		printf( "Control-based refinement is supported only for DNA.\n" );
 		exit(1);
 	}
 	if ( config->threadNum < 0 ) {
