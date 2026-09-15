@@ -121,6 +121,67 @@ void createOutputDirectory( const string &outputPrefix ) {
 	}
 }
 
+// Write per-pipeline seed assignments and the offsets captured before Gibbs updates
+void writeInitialization( const Config *config,
+			  const Dataset *dataset,
+			  const vector<SeedModel> &seedModels,
+			  const vector<PipelineResult> &pipelineResults ) {
+	string seedFilename = config->outputPrefix + ".seeds.tsv";
+	ofstream seedFile(seedFilename);
+	if ( seedFile.is_open() == false ) {
+		printf( "Unable to create output file: %s\n", seedFilename.c_str() );
+		exit(1);
+	}
+	seedFile << setprecision(17);
+	seedFile << "Pipeline\tSeedValid\tSeedWord\tSeedCode\tSeedLength\tSeedSupport"
+		 << "\tExpectedSeedSupport\tSeedRank\tAnchorOffset\tAnchorRank\n";
+	for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
+		const SeedModel &seedModel = seedModels[pipelineIdx];
+		seedFile << pipelineIdx << "\t" << (seedModel.valid ? "Yes" : "No") << "\t";
+		if ( seedModel.seedString.empty() ) {
+			seedFile << "NA\tNA\t" << seedModel.seedLength << "\t0\tNA\tNA\tNA\tNA\n";
+			continue;
+		}
+		seedFile << seedModel.seedString << "\t" << seedModel.seedCode << "\t"
+			 << seedModel.seedLength << "\t" << seedModel.seedSupport << "\t"
+			 << seedModel.seedExpectedSupport << "\t" << seedModel.seedRank << "\t";
+		if ( seedModel.valid ) {
+			seedFile << seedModel.anchorOffset << "\t" << seedModel.anchorRank << "\n";
+		} else {
+			seedFile << "NA\tNA\n";
+		}
+	}
+	seedFile.close();
+	if ( seedFile.fail() ) {
+		printf( "Unable to write output file: %s\n", seedFilename.c_str() );
+		exit(1);
+	}
+
+	string offsetFilename = config->outputPrefix + ".initial_offsets.tsv";
+	ofstream offsetFile(offsetFilename);
+	if ( offsetFile.is_open() == false ) {
+		printf( "Unable to create output file: %s\n", offsetFilename.c_str() );
+		exit(1);
+	}
+	offsetFile << "Sequence\tName";
+	for ( size_t pipelineIdx = 0; pipelineIdx < pipelineResults.size(); pipelineIdx ++ ) {
+		offsetFile << "\tPipeline_" << pipelineIdx;
+	}
+	offsetFile << "\n";
+	for ( size_t seqIdx = 0; seqIdx < dataset->sequences.size(); seqIdx ++ ) {
+		offsetFile << seqIdx << "\t" << dataset->names[seqIdx];
+		for ( size_t pipelineIdx = 0; pipelineIdx < pipelineResults.size(); pipelineIdx ++ ) {
+			offsetFile << "\t" << pipelineResults[pipelineIdx].initialOffsets[seqIdx];
+		}
+		offsetFile << "\n";
+	}
+	offsetFile.close();
+	if ( offsetFile.fail() ) {
+		printf( "Unable to write output file: %s\n", offsetFilename.c_str() );
+		exit(1);
+	}
+}
+
 // Write discovered motif sites in FASTA format
 void writeMotifFASTA( const Config *config,
 		      const Dataset *dataset,
@@ -306,7 +367,7 @@ void writeMEME( const Config *config,
 // Write a result summary
 void writeSummary( const Config *config,
 		   const Dataset *dataset,
-		   const SeedModel *seedModel,
+		   const vector<SeedModel> &seedModels,
 		   const vector<PipelineResult> &pipelineResults,
 		   const vector<OutputMotif> &outputMotifs,
 		   double elapsedTime ) {
@@ -317,12 +378,14 @@ void writeSummary( const Config *config,
 		exit(1);
 	}
 
+	const SeedModel *seedModel = &seedModels[outputMotifs[0].pipelineIdx];
 	outputFile << "Input File              : " << config->inputFilename << "\n";
 	outputFile << "Alphabet                : " << (config->alphabetMode == ALPHABET_DNA ? "DNA" : "Protein") << "\n";
 	outputFile << "Sequence Number          : " << dataset->sequences.size() << "\n";
 	outputFile << "Sequence Length          : " << dataset->sequenceLength << "\n";
 	outputFile << "Motif Length             : " << config->motifLength << "\n";
 	outputFile << "SampleNum                : " << seedModel->sampleNum << "\n";
+	outputFile << "Seed Pipeline            : " << outputMotifs[0].pipelineIdx << "\n";
 	outputFile << "Seed Valid               : " << (seedModel->valid ? "Yes" : "No") << "\n";
 	if ( seedModel->valid ) {
 		outputFile << "Selected Seed            : " << seedModel->seedString << "\n";
@@ -370,10 +433,11 @@ void writeSummary( const Config *config,
 // Print the final result
 void printResult( const Config *config,
 		  const Dataset *dataset,
-		  const SeedModel *seedModel,
+		  const vector<SeedModel> &seedModels,
 		  const vector<PipelineResult> &pipelineResults,
 		  const vector<OutputMotif> &outputMotifs,
 		  double elapsedTime ) {
+	const SeedModel *seedModel = &seedModels[outputMotifs[0].pipelineIdx];
 	printf( "---------------------------------------------------------------------\n" );
 	printf( "MORBIUS+ RESULT\n" );
 	printf( "---------------------------------------------------------------------\n" );
@@ -381,6 +445,7 @@ void printResult( const Config *config,
 	printf( "The Length of Sequence : %lu\n", (unsigned long)dataset->sequenceLength );
 	printf( "The Length of Motif    : %lu\n", (unsigned long)config->motifLength );
 	printf( "SampleNum              : %lu\n", (unsigned long)seedModel->sampleNum );
+	printf( "Seed Pipeline          : %d\n", outputMotifs[0].pipelineIdx );
 	if ( seedModel->valid ) {
 		printf( "Selected Seed          : %s\n", seedModel->seedString.c_str() );
 		printf( "Anchor Offset          : %lu\n", (unsigned long)seedModel->anchorOffset );

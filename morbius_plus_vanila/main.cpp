@@ -40,8 +40,8 @@ int main( int argc, char **argv ) {
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
 	double seedStartTime = timeChecker();
-	SeedModel seedModel;
-	buildSeedModel(&config, &dataset, &seedModel);
+	vector<SeedModel> seedModels;
+	buildSeedModels(&config, &dataset, seedModels);
 	double seedElapsedTime = timeChecker() - seedStartTime;
 	printf( "[STEP 2] Building the support-guided initialization model is done!\n" );
 	printf( "Seed Initialization Time: %.8f\n", seedElapsedTime );
@@ -57,7 +57,7 @@ int main( int argc, char **argv ) {
 	fflush( stdout );
 	double processStartTime = timeChecker();
 	vector<PipelineResult> pipelineResults;
-	runPipelines(&config, &dataset, &seedModel, pipelineResults);
+	runPipelines(&config, &dataset, seedModels, pipelineResults);
 	double processElapsedTime = timeChecker() - processStartTime;
 	printf( "[STEP 3] Running Morbius+ Gibbs pipelines is done!\n" );
 	printf( "---------------------------------------------------------------------\n" );
@@ -77,13 +77,14 @@ int main( int argc, char **argv ) {
 	vector<OutputMotif> outputMotifs;
 	selectOutputMotifs(&config, &dataset, pipelineResults, outputMotifs);
 	createOutputDirectory(config.outputPrefix);
+	writeInitialization(&config, &dataset, seedModels, pipelineResults);
 	writeMotifFASTA(&config, &dataset, pipelineResults, outputMotifs);
 	writeOffsets(&config, &dataset, pipelineResults, outputMotifs);
 	writePWM(&config, &dataset, outputMotifs);
 	writeMEME(&config, &dataset, outputMotifs);
 	writeSummary(&config,
 		     &dataset,
-		     &seedModel,
+		     seedModels,
 		     pipelineResults,
 		     outputMotifs,
 		     seedElapsedTime + processElapsedTime);
@@ -97,7 +98,7 @@ int main( int argc, char **argv ) {
 
 	printResult(&config,
 		    &dataset,
-		    &seedModel,
+		    seedModels,
 		    pipelineResults,
 		    outputMotifs,
 		    seedElapsedTime + processElapsedTime);

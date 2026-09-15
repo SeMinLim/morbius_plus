@@ -157,18 +157,20 @@ double calculateMarkovSeedProbability( uint32_t seedCode,
 	return probability;
 }
 
-// Select the highest-ranked seed
-void selectSeed( const Dataset *dataset,
+// Select the highest-ranked distinct seeds in pipeline order
+void selectSeeds( const Dataset *dataset,
 		 size_t sampleNum,
 		 size_t seedLength,
 		 const vector<uint32_t> &seedSupport,
 		 const vector<uint8_t> &seedValid,
 		 const MarkovModel *markovModel,
-		 SeedModel *seedModel ) {
-	seedModel->valid = false;
-	seedModel->seedRank = -numeric_limits<double>::infinity();
-	seedModel->seedLength = seedLength;
-	seedModel->sampleNum = sampleNum;
+		 vector<SeedModel> &seedModels ) {
+	seedModels.assign((size_t)NUMPIPELINE, SeedModel{});
+	for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
+		seedModels[pipelineIdx].seedRank = -numeric_limits<double>::infinity();
+		seedModels[pipelineIdx].seedLength = seedLength;
+		seedModels[pipelineIdx].sampleNum = sampleNum;
+	}
 
 	size_t positionNum = dataset->sequenceLength - seedLength + 1;
 	for ( uint32_t code = 0; code < seedSupport.size(); code ++ ) {
@@ -189,19 +191,26 @@ void selectSeed( const Dataset *dataset,
 		double variance = (double)sampleNum * sequenceProbability * (1.0 - sequenceProbability);
 		double rank = ((double)seedSupport[code] - expectedSupport) / sqrt(variance + 1.0e-12);
 
-		bool better = false;
-		if ( seedModel->valid == false || rank > seedModel->seedRank ) better = true;
-		else if ( rank == seedModel->seedRank && seedSupport[code] > seedModel->seedSupport ) better = true;
-		else if ( rank == seedModel->seedRank && seedSupport[code] == seedModel->seedSupport &&
-			  code < seedModel->seedCode ) better = true;
+		for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
+			const SeedModel &currentSeed = seedModels[pipelineIdx];
+			bool better = false;
+			if ( currentSeed.valid == false || rank > currentSeed.seedRank ) better = true;
+			else if ( rank == currentSeed.seedRank && seedSupport[code] > currentSeed.seedSupport ) better = true;
+			else if ( rank == currentSeed.seedRank && seedSupport[code] == currentSeed.seedSupport &&
+				  code < currentSeed.seedCode ) better = true;
+			if ( better == false ) continue;
 
-		if ( better ) {
-			seedModel->valid = true;
-			seedModel->seedCode = code;
-			seedModel->seedString = decodeKmer(code, seedLength, dataset);
-			seedModel->seedSupport = seedSupport[code];
-			seedModel->seedExpectedSupport = expectedSupport;
-			seedModel->seedRank = rank;
+			for ( size_t moveIdx = seedModels.size() - 1; moveIdx > pipelineIdx; moveIdx -- ) {
+				seedModels[moveIdx] = seedModels[moveIdx - 1];
+			}
+			SeedModel &selectedSeed = seedModels[pipelineIdx];
+			selectedSeed.valid = true;
+			selectedSeed.seedCode = code;
+			selectedSeed.seedString = decodeKmer(code, seedLength, dataset);
+			selectedSeed.seedSupport = seedSupport[code];
+			selectedSeed.seedExpectedSupport = expectedSupport;
+			selectedSeed.seedRank = rank;
+			break;
 		}
 	}
 }
@@ -320,14 +329,16 @@ void buildGuidedOffsets( const Config *config, const Dataset *dataset, SeedModel
 	}
 }
 
-// Construct the complete seed model
-void buildSeedModel( const Config *config, const Dataset *dataset, SeedModel *seedModel ) {
-	seedModel->valid = false;
-	seedModel->sampleNum = min((size_t)SAMPLEMAX, dataset->sequences.size());
+// Construct per-pipeline seed models using one shared set of statistics
+void buildSeedModels( const Config *config,
+		      const Dataset *dataset,
+		      vector<SeedModel> &seedModels ) {
+	size_t sampleNum = min((size_t)SAMPLEMAX, dataset->sequences.size());
+	size_t seedLength;
 	if ( config->alphabetMode == ALPHABET_DNA ) {
-		seedModel->seedLength = min((size_t)DNASEEDMAX, config->motifLength);
+		seedLength = min((size_t)DNASEEDMAX, config->motifLength);
 	} else {
-		seedModel->seedLength = min((size_t)PROTEINSEEDMAX, config->motifLength);
+		seedLength = min((size_t)PROTEINSEEDMAX, config->motifLength);
 	}
 
 	vector<uint32_t> seedSupport;
@@ -335,18 +346,20 @@ void buildSeedModel( const Config *config, const Dataset *dataset, SeedModel *se
 	MarkovModel markovModel;
 	countSeedAndMarkovStatistics(dataset,
 				     config->alphabetMode,
-				     seedModel->sampleNum,
-				     seedModel->seedLength,
+				     sampleNum,
+				     seedLength,
 				     seedSupport,
 				     seedValid,
 				     &markovModel);
-	selectSeed(dataset,
-		   seedModel->sampleNum,
-		   seedModel->seedLength,
+	selectSeeds(dataset,
+		   sampleNum,
+		   seedLength,
 		   seedSupport,
 		   seedValid,
 		   &markovModel,
-		   seedModel);
-	selectAnchor(config, dataset, seedModel);
-	buildGuidedOffsets(config, dataset, seedModel);
+		   seedModels);
+	for ( size_t pipelineIdx = 0; pipelineIdx < seedModels.size(); pipelineIdx ++ ) {
+		selectAnchor(config, dataset, &seedModels[pipelineIdx]);
+		buildGuidedOffsets(config, dataset, &seedModels[pipelineIdx]);
+	}
 }

@@ -69,7 +69,7 @@ grep -q "Consensus Subsequence    : MKLDPA" "$OUTPUT_DIR/protein_result.summary.
 test -s "$OUTPUT_DIR/dna_result.meme"
 test -s "$OUTPUT_DIR/protein_result.meme"
 
-for suffix in fasta offsets.tsv pwm.tsv meme; do
+for suffix in fasta offsets.tsv pwm.tsv meme seeds.tsv initial_offsets.tsv; do
 	diff -u "$OUTPUT_DIR/dna_result.$suffix" "$OUTPUT_DIR/dna_result_explicit_one.$suffix"
 done
 sed '/Elapsed Time/d' "$OUTPUT_DIR/dna_result.summary.txt" > "$OUTPUT_DIR/dna_result.summary.filtered.txt"
@@ -83,6 +83,13 @@ grep '^\[STEP 3\] Pipeline ' "$OUTPUT_DIR/dna_result.stdout.txt" \
 grep '^\[STEP 3\] Pipeline ' "$OUTPUT_DIR/dna_result_multiple.stdout.txt" \
 	> "$OUTPUT_DIR/dna_result_multiple.pipeline.txt"
 diff -u "$OUTPUT_DIR/dna_result.pipeline.txt" "$OUTPUT_DIR/dna_result_multiple.pipeline.txt"
+for suffix in seeds.tsv initial_offsets.tsv; do
+	diff -u "$OUTPUT_DIR/dna_result.$suffix" "$OUTPUT_DIR/dna_result_multiple.$suffix"
+done
+test "$(wc -l < "$OUTPUT_DIR/dna_result.seeds.tsv")" -eq 17
+test "$(wc -l < "$OUTPUT_DIR/dna_result.initial_offsets.tsv")" -eq 33
+awk -F '\t' 'NF != 18 { exit 1 } NR > 1 { for (i = 3; i <= NF; i++) if ($i < 0 || $i > 56) exit 1 }' \
+	"$OUTPUT_DIR/dna_result.initial_offsets.tsv"
 
 grep -q '^Requested Motif Number   : 5$' "$OUTPUT_DIR/dna_result_multiple.summary.txt"
 grep -q '^Reported Motif Number    : 5$' "$OUTPUT_DIR/dna_result_multiple.summary.txt"
@@ -129,5 +136,13 @@ if "$ROOT_DIR/morbius_plus_vanila" \
 	exit 1
 fi
 grep -q 'Invalid value for --motif-count' "$OUTPUT_DIR/invalid_overflow.stdout.txt"
+
+"${CXX:-g++}" -O2 -std=c++17 -Wall -Wextra -pedantic -pthread \
+	-I "$ROOT_DIR" \
+	"$ROOT_DIR/test/seed_initialization_test.cpp" \
+	"$ROOT_DIR/Utility.cpp" "$ROOT_DIR/SeedInitialization.cpp" "$ROOT_DIR/GibbsPipeline.cpp" \
+	-o "$OUTPUT_DIR/seed_initialization_test"
+"$OUTPUT_DIR/seed_initialization_test" "$ROOT_DIR/test/DNA_TEST.fasta" \
+	> "$OUTPUT_DIR/seed_initialization_test.stdout.txt"
 
 printf "All Morbius+ vanilla tests passed.\n"

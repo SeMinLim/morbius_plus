@@ -93,6 +93,7 @@ typedef struct PipelineState {
 }PipelineState;
 
 typedef struct PipelineResult {
+	std::vector<uint32_t> initialOffsets;
 	std::vector<uint32_t> bestOffsets;
 	uint64_t bestScore;
 	uint64_t updateNum;
@@ -123,7 +124,9 @@ uint32_t encodeKmer( const std::string &sequence,
 		     size_t kmerLength,
 		     const Dataset *dataset );
 
-void buildSeedModel( const Config *config, const Dataset *dataset, SeedModel *seedModel );
+void buildSeedModels( const Config *config,
+		      const Dataset *dataset,
+		      std::vector<SeedModel> &seedModels );
 void initializeOffsets( const Config *config,
 			const Dataset *dataset,
 			const SeedModel *seedModel,
@@ -144,7 +147,7 @@ double calculateNormalizedScore( const Config *config,
 uint64_t calculateRawScoreThreshold( const Config *config, const Dataset *dataset );
 void runPipelines( const Config *config,
 		   const Dataset *dataset,
-		   const SeedModel *seedModel,
+		   const std::vector<SeedModel> &seedModels,
 		   std::vector<PipelineResult> &pipelineResults );
 int selectBestPipeline( const std::vector<PipelineResult> &pipelineResults );
 
@@ -160,6 +163,10 @@ void selectOutputMotifs( const Config *config,
 			 const std::vector<PipelineResult> &pipelineResults,
 			 std::vector<OutputMotif> &outputMotifs );
 void createOutputDirectory( const std::string &outputPrefix );
+void writeInitialization( const Config *config,
+			  const Dataset *dataset,
+			  const std::vector<SeedModel> &seedModels,
+			  const std::vector<PipelineResult> &pipelineResults );
 void writeMotifFASTA( const Config *config,
 		      const Dataset *dataset,
 		      const std::vector<PipelineResult> &pipelineResults,
@@ -176,13 +183,13 @@ void writeMEME( const Config *config,
 		const std::vector<OutputMotif> &outputMotifs );
 void writeSummary( const Config *config,
 		   const Dataset *dataset,
-		   const SeedModel *seedModel,
+		   const std::vector<SeedModel> &seedModels,
 		   const std::vector<PipelineResult> &pipelineResults,
 		   const std::vector<OutputMotif> &outputMotifs,
 		   double elapsedTime );
 void printResult( const Config *config,
 		  const Dataset *dataset,
-		  const SeedModel *seedModel,
+		  const std::vector<SeedModel> &seedModels,
 		  const std::vector<PipelineResult> &pipelineResults,
 		  const std::vector<OutputMotif> &outputMotifs,
 		  double elapsedTime );

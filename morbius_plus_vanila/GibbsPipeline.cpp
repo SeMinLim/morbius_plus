@@ -334,6 +334,7 @@ void runPipeline( const Config *config,
 	double startTime = timeChecker();
 	PipelineState state;
 	initializeOffsets(config, dataset, seedModel, pipelineIdx, state.offsets);
+	result->initialOffsets = state.offsets;
 	initializeRandomGenerator(&state.randomGenerator,
 				  config->randomSeed ^
 				  ((uint64_t)(pipelineIdx + 1) * 0xd2b74407b1ce6e93ULL));
@@ -397,7 +398,7 @@ void runPipeline( const Config *config,
 // Run all Gibbs pipelines
 void runPipelines( const Config *config,
 		   const Dataset *dataset,
-		   const SeedModel *seedModel,
+		   const vector<SeedModel> &seedModels,
 		   vector<PipelineResult> &pipelineResults ) {
 	pipelineResults.resize((size_t)NUMPIPELINE);
 	uint64_t rawScoreThreshold = calculateRawScoreThreshold(config, dataset);
@@ -415,7 +416,7 @@ void runPipelines( const Config *config,
 			workers.emplace_back(runPipeline,
 					     config,
 					     dataset,
-					     seedModel,
+					     &seedModels[pipelineIdx],
 					     pipelineIdx,
 					     rawScoreThreshold,
 					     &pipelineResults[pipelineIdx]);
