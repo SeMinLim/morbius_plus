@@ -237,7 +237,7 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 		   << "Output order: unchanged original Gibbs bestScore descending, pipeline index ascending on ties.\n"
 		   << "Deduplication: exact smoothed PWM probabilities after refinement; no reverse-complement or similarity clustering.\n"
 		   << "Refinement elapsed seconds: " << elapsedTime << "\n"
-		   << "Program elapsed includes input, Gibbs, refinement, and result output before final summary; external timing covers the whole process.\n"
+		   << "Program elapsed includes input, seed initialization, Gibbs, and refinement; it stops before motif selection and output. External timing covers the whole process.\n"
 		   << "No reference motifs or Tomtom scores are used in refinement.\n";
 	outputFile << "All MEME exports retain uniform letter frequencies for the existing Tomtom evaluation convention; refinement uses the separate Control Markov background.\n";
 	closeRefinementFile(outputFile, filename);

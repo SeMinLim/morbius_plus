@@ -172,9 +172,11 @@ The method follows the sequence-level enrichment principle of
 Morbius+'s pseudocount 1, pipeline candidates and output ranking; it is not a
 reimplementation of all STREME estimation and search procedures. Refinement adds
 background construction, repeated scanning and output work. With `--control`,
-the reported elapsed time includes input reading, Gibbs, refinement and result
-file writes up to the final summary timestamp. For a complete end-to-end benchmark,
-measure the whole process externally, including its final summary/console writes;
+the reported elapsed time starts at program entry and ends immediately after
+refinement, including input reading, seed initialization, Gibbs and refinement.
+Motif selection, result-file output and final summary/console writes are excluded.
+Without `--control`, elapsed time retains the seed initialization plus Gibbs interval.
+For a complete end-to-end benchmark, measure the whole process externally.
 Tomtom evaluation is a separate process and is excluded.
 
 ## Outputs

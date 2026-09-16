@@ -90,6 +90,10 @@ int main( int argc, char **argv ) {
 			&refinementBackground, refinementResults);
 		refinementElapsedTime = timeChecker() - refinementStartTime;
 	}
+	// Stop before motif selection and all result-file output.
+	// Refinement-enabled runs include input reading; other runs retain seed + Gibbs timing.
+	double elapsedTime = refinementEnabled ? timeChecker() - programStartTime :
+		seedElapsedTime + processElapsedTime;
 
 	//--------------------------------------------------------------------------------------------
 	// [STEP 4]
@@ -118,10 +122,6 @@ int main( int argc, char **argv ) {
 		writeRefinement(&config, &dataset, &control, &refinementBackground,
 			refinementResults, outputMotifs, refinementElapsedTime);
 	}
-	// Enabled-mode time includes input, Gibbs, refinement and result-file output.
-	// As with any in-program timestamp, writing this final summary follows the measurement.
-	double elapsedTime = refinementEnabled ? timeChecker() - programStartTime :
-		seedElapsedTime + processElapsedTime;
 	writeSummary(&config,
 		     &dataset,
 		     seedModels,

@@ -482,7 +482,7 @@ void writeSummary( const Config *config,
 	if ( config->controlFilename.empty() == false ) {
 		outputFile << "Refinement               : Separate post-Gibbs Primary/Control enrichment\n";
 		outputFile << "Best Score Meaning       : Original Gibbs agreement score (all Primary sequences)\n";
-		outputFile << "Elapsed Time Includes    : Input, seed initialization, Gibbs, refinement, and result output before summary\n";
+		outputFile << "Elapsed Time Includes    : Input, seed initialization, Gibbs, and refinement (before motif selection and output)\n";
 	}
 	if ( config->outputMotifNum == 1 && outputMotifs.empty() == false ) {
 		const OutputMotif &outputMotif = outputMotifs[0];
