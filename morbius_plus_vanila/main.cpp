@@ -26,13 +26,15 @@ int main( int argc, char **argv ) {
 	printf( "[STEP 1] Reading sequence FASTA file is started!\n" );
 	printf( "---------------------------------------------------------------------\n" );
 	fflush( stdout );
-	readFASTA(config.inputFilename, &dataset);
+	bool generateControl = config.alphabetMode == ALPHABET_DNA && config.controlFilename.empty();
+	ControlCounts controlCounts;
+	readFASTA(config.inputFilename, &dataset, generateControl ? &controlCounts : NULL);
 	validateWorkload(&config, &dataset);
 	Dataset control;
 	bool refinementEnabled = config.alphabetMode == ALPHABET_DNA;
 	if ( refinementEnabled ) {
 		if ( config.controlFilename.empty() ) {
-			generateUniformControl(&dataset, &control);
+			generateMarkovControl(&config, &dataset, &controlCounts, &control);
 		} else {
 			configureAlphabet(config.alphabetMode, &control);
 			readFASTA(config.controlFilename, &control);

@@ -52,8 +52,12 @@ mkdir -p "$OUTPUT_DIR"
 	--threads 4 \
 	> "$OUTPUT_DIR/protein_result.stdout.txt"
 
+# Keep the duplicate-output fixture enriched independently of auto-Control policy.
+printf '>control_0\nTTTTTTTT\n>control_1\nTTTTTTTT\n>control_2\nTTTTTTTT\n>control_3\nTTTTTTTT\n' \
+	> "$OUTPUT_DIR/duplicate_control.fasta"
 "$ROOT_DIR/morbius_plus_vanila" \
 	--input "$ROOT_DIR/test/DUPLICATE_DNA_TEST.fasta" \
+	--control "$OUTPUT_DIR/duplicate_control.fasta" \
 	--output "$OUTPUT_DIR/duplicate_result" \
 	--alphabet dna \
 	--motif-length 8 \
@@ -191,10 +195,10 @@ python3 "$ROOT_DIR/test/validate_refinement_outputs.py" "$ROOT_DIR/morbius_plus_
 	"$OUTPUT_DIR/refinement"
 
 "${CXX:-g++}" -O2 -std=c++17 -Wall -Wextra -pedantic -pthread \
-	-I "$ROOT_DIR" "$ROOT_DIR/test/uniform_control_test.cpp" "$ROOT_DIR/Utility.cpp" \
-	-o "$OUTPUT_DIR/uniform_control_test"
-"$OUTPUT_DIR/uniform_control_test" > "$OUTPUT_DIR/uniform_control_test.stdout.txt"
-python3 "$ROOT_DIR/test/validate_uniform_control.py" "$ROOT_DIR/morbius_plus_vanila" \
-	"$OUTPUT_DIR/uniform_control"
+	-I "$ROOT_DIR" "$ROOT_DIR/test/markov_control_test.cpp" "$ROOT_DIR/Utility.cpp" \
+	-o "$OUTPUT_DIR/markov_control_test"
+"$OUTPUT_DIR/markov_control_test" "$OUTPUT_DIR/markov_counting.fasta" > "$OUTPUT_DIR/markov_control_test.stdout.txt"
+python3 "$ROOT_DIR/test/validate_markov_control.py" "$ROOT_DIR/morbius_plus_vanila" \
+	"$OUTPUT_DIR/markov_control"
 
 printf "All Morbius+ vanilla tests passed.\n"

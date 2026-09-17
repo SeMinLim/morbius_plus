@@ -1,4 +1,4 @@
-"""Check automatic Control against an independently materialized fixed-seed stream."""
+"""Check order-three automatic Control with an independent string-count oracle."""
 from pathlib import Path
 import random
 import subprocess
@@ -7,22 +7,57 @@ import sys
 from validate_refinement_outputs import all_pipeline_table, check_outputs, fasta, meme, write_fasta
 
 
-def uniform_control(primary):
+def splitmix64(state):
     mask = (1 << 64) - 1
-    state, word, remaining = 1, 0, 0
-    records = []
+    state = (state + 0x9E3779B97F4A7C15) & mask
+    value = ((state ^ (state >> 30)) * 0xBF58476D1CE4E5B9) & mask
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask
+    return state, value ^ (value >> 31)
+
+
+def control_words(index):
+    _, seed = splitmix64(1 + index)
+    state = []
+    for _ in range(4):
+        seed, value = splitmix64(seed)
+        state.append((value ^ (value >> 32)) & 0xFFFFFFFF)
+    if not any(state):
+        state[0] = 1
+    while True:
+        yield (state[0] + state[3]) & 0xFFFFFFFF
+        shift = (state[1] << 9) & 0xFFFFFFFF
+        state[2] ^= state[0]
+        state[3] ^= state[1]
+        state[1] ^= state[2]
+        state[0] ^= state[3]
+        state[2] ^= shift
+        state[3] = ((state[3] << 11) | (state[3] >> 21)) & 0xFFFFFFFF
+
+
+def markov_control(primary):
+    # String keys and direct substrings deliberately avoid the packed C++ tables.
+    from collections import Counter
+    counts = Counter()
     for _, sequence in primary:
-        output = []
+        for width in range(1, 5):
+            counts.update(sequence[pos:pos + width] for pos in range(len(sequence) - width + 1)
+                          if set(sequence[pos:pos + width]) <= set("ACGT"))
+    records = []
+    for index, (_, sequence) in enumerate(primary):
+        output = ""
+        words = control_words(index)
         for _ in sequence:
-            if remaining == 0:
-                state = (state + 0x9E3779B97F4A7C15) & mask
-                value = ((state ^ (state >> 30)) * 0xBF58476D1CE4E5B9) & mask
-                value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask
-                word, remaining = value ^ (value >> 31), 32
-            output.append("ACGT"[word & 3])
-            word >>= 2
-            remaining -= 1
-        records.append("".join(output))
+            context = output[-3:]
+            outgoing = [counts[context + base] for base in "ACGT"]
+            while not sum(outgoing) and context:
+                context = context[1:]
+                outgoing = [counts[context + base] for base in "ACGT"]
+            if not sum(outgoing):
+                outgoing = [1, 1, 1, 1]
+            cdf = [sum(outgoing[:edge]) * (1 << 32) // sum(outgoing) for edge in (1, 2, 3)]
+            random_word = next(words)
+            output += "ACGT"[sum(random_word >= edge for edge in cdf)]
+        records.append(output)
     return records
 
 
@@ -39,7 +74,7 @@ def main():
     control_path = work / "explicit_control.fasta"
     write_fasta(primary_path, primary)
     primary_records = fasta(primary_path)
-    write_fasta(control_path, uniform_control(primary_records))
+    write_fasta(control_path, markov_control(primary_records))
     control_records = fasta(control_path)
     suffixes = {
         ".fasta", ".offsets.tsv", ".pwm.tsv", ".meme", ".seeds.tsv", ".initial_offsets.tsv",

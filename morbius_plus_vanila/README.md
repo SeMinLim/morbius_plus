@@ -62,7 +62,7 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 - `--score-threshold <F>`: normalized Overall Consensus Agreement Score threshold in `[0, 1]`
 - `--seed <N>`: Gibbs random seed (does not change generated Control)
 - `--threads <N>`: number of concurrent CPU threads
-- `--control <FASTA>`: supply external DNA Control; otherwise generate uniform DNA Control in memory
+- `--control <FASTA>`: supply external DNA Control; otherwise generate third-order Markov DNA Control from Primary in memory
 
 ## DNA Control and refinement
 
@@ -83,24 +83,48 @@ External Control must have the same fixed sequence length as Primary; their
 sequence counts may differ. An unreadable or invalid supplied Control is an error
 and does not trigger automatic generation.
 
-When `--control` is omitted for DNA, one uniform random Control dataset is
+When `--control` is omitted for DNA, one third-order Markov Control dataset is
 generated in memory with the same sequence count and each sequence length as
-Primary. A local SplitMix64 state starts from the fixed `DEFAULTCONTROLSEED=1`,
-independently of the Gibbs seed and thread count. Each 64-bit word supplies up to
-32 bases, consuming low-to-high 2-bit symbols: `00=A`, `01=C`, `10=G`, `11=T`.
-Unused symbols carry across sequence boundaries. This gives each base probability
-0.25, without forcing exact 25% sample counts or preserving Primary GC/k-mer
-frequencies. Generation performs no frequency estimation, transition modeling or
-shuffling. The dataset is generated once and shared by all refinement candidates
-and iterations; no intermediate Control FASTA is written or read. Supplying
-`--control` skips this generator entirely. Summaries record the generated source
-and fixed seed for reproduction.
+Primary. All forward Primary 1-mer through 4-mer observations are counted while
+the FASTA reader normalizes the input, using 340 `uint64_t` counts indexed by
+2-bit base codes. Counts never cross sequence boundaries; the counting helper
+also resets its context at an invalid base. This does not change input
+validation: DNA containing `N` or other non-ACGT symbols is still rejected.
+These are full-Primary statistics, separate from the Seed Initializer's sampled
+statistics. Supplied external Control skips counting, model preparation and
+generation entirely.
 
-Only Control generation uses this uniform order-zero model. The existing
+The first three generated bases use orders 0, 1 and 2; subsequent bases use the
+preceding three generated bases as their context. Observed transition rows use
+their outgoing counts without pseudocounts. A row with no outgoing observations
+backs off to its shorter suffix recursively; an empty order-zero row falls back
+to equal A/C/G/T probabilities. Before generation, each row's cumulative A,
+A+C and A+C+G counts is converted to `floor(2^32 * cumulative / total)`.
+The 85 rows contain three `uint64_t` boundaries each, totaling 2,040 bytes;
+64-bit storage represents the upper boundary `2^32` safely.
+
+Each generated base uses one 32-bit xoshiro128+ random value, a context-indexed
+table lookup and two integer comparisons. No probability division, logarithm,
+hash lookup or temporary string construction occurs in this loop. Every sequence
+has its own Control RNG, initialized from
+`SplitMix64(state = DEFAULTCONTROLSEED + sequence_index)` with
+`DEFAULTCONTROLSEED=1` and zero-based sequence indices. Control RNGs are separate
+from Gibbs RNGs and `--seed`. Generation uses the existing `--threads` budget
+(default 16, capped at 16 and the sequence count), with each sequence's bases
+generated in order. Thread scheduling and thread count do not change the
+generated sequences.
+
+The dataset is generated once and shared by all refinement candidates and
+iterations; no intermediate Control FASTA is written or read. Summaries record
+the generated source and fixed seed for reproduction. The model reflects the
+observed base composition and third-order conditional probabilities, subject to
+32-bit cumulative-probability quantization. It is not a shuffle and does not
+preserve each input sequence's exact k-mer counts.
+
+The third-order model is used only for Control generation. The existing
 second-order refinement background is still estimated once from the resulting
-Control dataset, just as for external Control. Composition differences between
-Primary and uniform Control can be scored as enrichment; this fallback does not
-preserve biological background statistics or guarantee the same motif quality.
+Control dataset, just as for external Control. This change does not establish a
+measured speedup or preservation of previous motif-quality results.
 
 The following operations are applied to every pipeline candidate before output
 ranking, deduplication or the `--motif-count` limit:
@@ -193,7 +217,8 @@ Morbius+'s pseudocount 1, pipeline candidates and output ranking; it is not a
 reimplementation of all STREME estimation and search procedures. Refinement adds
 background construction, repeated scanning and output work. For DNA,
 the reported elapsed time starts at program entry and ends immediately after
-refinement, including input reading, any automatic Control generation, seed
+refinement, including input reading, any automatic Control counting, model
+preparation and generation, seed
 initialization, Gibbs and refinement.
 Motif selection, result-file output and final summary/console writes are excluded.
 For protein, elapsed time retains the seed initialization plus Gibbs interval.

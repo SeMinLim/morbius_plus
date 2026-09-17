@@ -51,6 +51,14 @@ typedef struct Dataset {
 	int alphabetSize;
 }Dataset;
 
+typedef struct ControlCounts {
+	uint64_t kmer[340];
+}ControlCounts;
+
+typedef struct ControlTransitions {
+	uint64_t cumulative[85][3];
+}ControlTransitions;
+
 typedef struct RandomGenerator {
 	uint32_t state[4];
 }RandomGenerator;
@@ -149,8 +157,11 @@ double randomUnit( RandomGenerator *randomGenerator );
 uint32_t randomBounded( RandomGenerator *randomGenerator, uint32_t bound );
 void parseArguments( int argc, char **argv, Config *config );
 void configureAlphabet( int alphabetMode, Dataset *dataset );
-void generateUniformControl( const Dataset *primary, Dataset *control );
-void readFASTA( const std::string &filename, Dataset *dataset );
+void countControlBase( ControlCounts *counts, uint32_t *context, size_t *contextLength, int symbol );
+void buildControlTransitions( const ControlCounts *counts, ControlTransitions *transitions );
+void generateMarkovControl( const Config *config, const Dataset *primary,
+			    const ControlCounts *counts, Dataset *control );
+void readFASTA( const std::string &filename, Dataset *dataset, ControlCounts *controlCounts = NULL );
 void validateWorkload( const Config *config, const Dataset *dataset );
 uint32_t encodeKmer( const std::string &sequence,
 		     size_t position,

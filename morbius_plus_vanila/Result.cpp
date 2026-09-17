@@ -482,8 +482,8 @@ void writeSummary( const Config *config,
 	if ( config->alphabetMode == ALPHABET_DNA ) {
 		outputFile << "Refinement               : Separate post-Gibbs Primary/Control enrichment\n";
 		if ( config->controlFilename.empty() ) {
-			outputFile << "Control Source           : Generated uniform DNA in memory; A/C/G/T probability 0.25 each\n";
-			outputFile << "Control Generator        : SplitMix64, fixed seed " << DEFAULTCONTROLSEED << "\n";
+			outputFile << "Control Source           : Generated third-order Markov DNA in memory from Primary\n";
+			outputFile << "Control Generator        : Per-sequence xoshiro128+, SplitMix64-derived fixed seed " << DEFAULTCONTROLSEED << "\n";
 			outputFile << "Control Generation Time  : Included in elapsed time\n";
 		}
 		outputFile << "Best Score Meaning       : Original Gibbs agreement score (all Primary sequences)\n";
@@ -567,7 +567,7 @@ void printResult( const Config *config,
 	if ( config->alphabetMode == ALPHABET_DNA ) {
 		printf( "Refinement             : Separate post-Gibbs Primary/Control enrichment\n" );
 		if ( config->controlFilename.empty() ) {
-			printf( "Control Source         : Generated uniform DNA in memory (fixed seed %d)\n", DEFAULTCONTROLSEED );
+			printf( "Control Source         : Generated third-order Markov DNA in memory from Primary (fixed seed %d)\n", DEFAULTCONTROLSEED );
 		}
 		printf( "Best Score Meaning     : Original Gibbs agreement score (all Primary sequences)\n" );
 	}

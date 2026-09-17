@@ -126,7 +126,7 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 		const RefinementBackground *background, const vector<RefinementResult> &results,
 		const vector<OutputMotif> &motifs, double elapsedTime ) {
 	string controlSource = config->controlFilename.empty() ?
-		"Generated uniform DNA (in memory)" : config->controlFilename;
+		"Generated third-order Markov DNA in memory from Primary" : config->controlFilename;
 	string filename = config->outputPrefix + ".refinement.tsv";
 	ofstream outputFile = openRefinementFile(filename);
 	outputFile << "Pipeline\tOutputRank\tFitSource\tPrimarySiteNum"
@@ -242,9 +242,12 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 		   << "Program elapsed includes input, seed initialization, Gibbs, and refinement; it stops before motif selection and output. External timing covers the whole process.\n"
 		   << "No reference motifs or Tomtom scores are used in refinement.\n";
 	if ( config->controlFilename.empty() ) {
-		outputFile << "Control generation: uniform independent A/C/G/T with probability 0.25 each; SplitMix64, fixed seed "
-			   << DEFAULTCONTROLSEED << "; low-to-high 2-bit symbols, unused symbols carried across sequences.\n"
-			   << "Control generated once in memory; same sequence counts and lengths as Primary; generation included in program elapsed.\n";
+		outputFile << "Control generation: third-order Markov model from all forward Primary 1-mer through 4-mer observations; no pseudocounts on observed rows.\n"
+			   << "Control backoff: unobserved transition rows use shorter suffixes; an empty order-zero row uses uniform probabilities.\n"
+			   << "Control sampling: orders 0, 1 and 2 for the first three bases, then order 3; floor(2^32 * cumulative / total) integer boundaries.\n"
+			   << "Control RNG: per-sequence xoshiro128+, initialized with SplitMix64(state = fixed seed + zero-based sequence index); fixed seed "
+			   << DEFAULTCONTROLSEED << "; independent of Gibbs seed and thread scheduling.\n"
+			   << "Control generated once in memory; same sequence counts and lengths as Primary; counting, model preparation and generation included in program elapsed.\n";
 	}
 	outputFile << "All MEME exports retain uniform letter frequencies for the existing Tomtom evaluation convention; refinement uses the separate Control Markov background.\n";
 	closeRefinementFile(outputFile, filename);

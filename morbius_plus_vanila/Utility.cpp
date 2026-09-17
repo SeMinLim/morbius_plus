@@ -6,7 +6,10 @@
 #include <stdlib.h>
 
 #include <fstream>
+#include <algorithm>
+#include <stdexcept>
 #include <string>
+#include <thread>
 using namespace std;
 
 
@@ -87,7 +90,7 @@ void printUsage( const char *programName ) {
 	printf( "Usage: %s --input <FASTA> --output <PREFIX> --alphabet <dna|protein> --motif-length <N> [Options]\n", programName );
 	printf( "\n" );
 	printf( "Options:\n" );
-	printf( "  --control <FASTA>      DNA Control input; omit to generate uniform DNA Control in memory\n" );
+	printf( "  --control <FASTA>      DNA Control input; omit to generate third-order Markov Control from Primary\n" );
 	printf( "  --motif-count <N>      Top unique motifs to output [default: %d; at most %d available]\n",
 		DEFAULTOUTPUTMOTIFNUM,
 		NUMPIPELINE
@@ -97,7 +100,7 @@ void printUsage( const char *programName ) {
 	printf( "  --seed <N>             Gibbs random seed [default: %d]\n", DEFAULTSEED );
 	printf( "  --threads <N>          Concurrent CPU threads [default: %d]\n", NUMPIPELINE );
 	printf( "  --help                 Print this message\n" );
-	printf( "DNA refinement uses supplied Control or generated A/C/G/T Control (25%% each, fixed seed %d).\n", DEFAULTCONTROLSEED );
+	printf( "DNA refinement uses supplied Control or in-memory Markov Control (order 3, fixed seed %d).\n", DEFAULTCONTROLSEED );
 }
 
 // Parse an unsigned integer
@@ -213,43 +216,149 @@ void configureAlphabet( int alphabetMode, Dataset *dataset ) {
 	}
 }
 
-// Generate uniform DNA Control once, with RNG state separate from every Gibbs pipeline.
-void generateUniformControl( const Dataset *primary, Dataset *control ) {
-	configureAlphabet(ALPHABET_DNA, control);
-	control->sequenceLength = primary->sequenceLength;
-	control->names = primary->names;
-	control->sequences.resize(primary->sequences.size());
-	uint64_t state = DEFAULTCONTROLSEED;
-	uint64_t word = 0;
-	size_t available = 0;
-	for ( size_t seqIdx = 0; seqIdx < primary->sequences.size(); seqIdx ++ ) {
-		string &sequence = control->sequences[seqIdx];
-		sequence.resize(primary->sequences[seqIdx].size());
-		size_t position = 0;
-		while ( position < sequence.size() ) {
-			if ( available == 0 ) {
-				word = splitMix64(&state);
-				available = 32;
+static const size_t CONTROLCOUNTSTART[4] = {0, 4, 20, 84};
+static const size_t CONTROLROWSTART[4] = {0, 1, 5, 21};
+static const uint32_t CONTEXTMASK[4] = {3, 15, 63, 255};
+
+// Accumulate all observed 1..4-mers; invalid symbols break the rolling history.
+void countControlBase( ControlCounts *counts, uint32_t *context, size_t *contextLength, int symbol ) {
+	if ( symbol < 0 || symbol > 3 ) {
+		*context = 0;
+		*contextLength = 0;
+		return;
+	}
+	*context = ((*context << 2) | (uint32_t)symbol) & 255U;
+	if ( *contextLength < 4 ) (*contextLength) ++;
+	for ( size_t length = 0; length < *contextLength; length ++ ) {
+		counts->kmer[CONTROLCOUNTSTART[length] + (*context & CONTEXTMASK[length])] ++;
+	}
+}
+
+// Exact floor(numerator * 2^32 / denominator), without overflowing uint64_t.
+// Only model construction calls this function, never the generation loop.
+static uint64_t controlProbabilityBoundary( uint64_t numerator, uint64_t denominator ) {
+	if ( numerator == denominator ) return 1ULL << 32;
+	uint64_t boundary = 0;
+	uint64_t remainder = numerator;
+	for ( int bit = 0; bit < 32; bit ++ ) {
+		boundary <<= 1;
+		if ( remainder >= denominator - remainder ) {
+			remainder -= denominator - remainder;
+			boundary |= 1;
+		} else {
+			remainder += remainder;
+		}
+	}
+	return boundary;
+}
+
+// Prepare 85 context rows once, from full-Primary forward-strand observations.
+void buildControlTransitions( const ControlCounts *counts, ControlTransitions *transitions ) {
+	for ( size_t order = 0; order < 4; order ++ ) {
+		for ( uint32_t context = 0; context < (1U << (2 * order)); context ++ ) {
+			size_t row = CONTROLROWSTART[order] + context;
+			size_t start = CONTROLCOUNTSTART[order] + (size_t)context * 4;
+			uint64_t total = 0;
+			for ( size_t symbol = 0; symbol < 4; symbol ++ ) {
+				if ( counts->kmer[start + symbol] > UINT64_MAX - total ) {
+					throw overflow_error("Control transition count overflow.");
+				}
+				total += counts->kmer[start + symbol];
 			}
-			size_t count = sequence.size() - position;
-			if ( count > available ) count = available;
-			for ( size_t idx = 0; idx < count; idx ++ ) {
-				sequence[position++] = "ACGT"[word & 3U];
-				word >>= 2;
+			if ( total == 0 ) {
+				for ( size_t symbol = 0; symbol < 3; symbol ++ ) {
+					if ( order == 0 ) {
+						transitions->cumulative[row][symbol] = (uint64_t)(symbol + 1) << 30;
+					} else {
+						uint32_t suffix = context & ((1U << (2 * (order - 1))) - 1U);
+						transitions->cumulative[row][symbol] =
+							transitions->cumulative[CONTROLROWSTART[order - 1] + suffix][symbol];
+					}
+				}
+			} else {
+				uint64_t cumulative = 0;
+				for ( size_t symbol = 0; symbol < 3; symbol ++ ) {
+					cumulative += counts->kmer[start + symbol];
+					transitions->cumulative[row][symbol] = controlProbabilityBoundary(cumulative, total);
+				}
 			}
-			available -= count;
 		}
 	}
 }
 
+// Each sequence has a stable private RNG stream, independent of worker order.
+static void generateControlRange( const ControlTransitions *transitions, Dataset *control,
+				  size_t begin, size_t end ) {
+	for ( size_t seqIdx = begin; seqIdx < end; seqIdx ++ ) {
+		uint64_t seedState = DEFAULTCONTROLSEED + (uint64_t)seqIdx;
+		RandomGenerator randomGenerator;
+		initializeRandomGenerator(&randomGenerator, splitMix64(&seedState));
+		string &sequence = control->sequences[seqIdx];
+		uint32_t context = 0;
+		size_t order = 0;
+		for ( size_t position = 0; position < sequence.size(); position ++ ) {
+			const uint64_t *boundary = transitions->cumulative[CONTROLROWSTART[order] + context];
+			uint32_t word = randomWord(&randomGenerator);
+			uint32_t symbol;
+			if ( word < boundary[1] ) symbol = word < boundary[0] ? 0 : 1;
+			else symbol = word < boundary[2] ? 2 : 3;
+			sequence[position] = "ACGT"[symbol];
+			context = ((context << 2) | symbol) & 63U;
+			if ( order < 3 ) order ++;
+		}
+	}
+}
+
+// Generate and retain one Control dataset, sharing one immutable transition table.
+void generateMarkovControl( const Config *config, const Dataset *primary,
+			    const ControlCounts *counts, Dataset *control ) {
+	ControlTransitions transitions;
+	buildControlTransitions(counts, &transitions);
+	configureAlphabet(ALPHABET_DNA, control);
+	control->sequenceLength = primary->sequenceLength;
+	control->names = primary->names;
+	control->sequences.resize(primary->sequences.size());
+	for ( size_t seqIdx = 0; seqIdx < primary->sequences.size(); seqIdx ++ ) {
+		control->sequences[seqIdx].resize(primary->sequences[seqIdx].size());
+	}
+	int threadNum = config->threadNum == 0 ? NUMPIPELINE : config->threadNum;
+	threadNum = max(1, min(threadNum, NUMPIPELINE));
+	size_t workerNum = min((size_t)threadNum, primary->sequences.size());
+	if ( workerNum <= 1 ) {
+		generateControlRange(&transitions, control, 0, primary->sequences.size());
+		return;
+	}
+	vector<thread> workers;
+	workers.reserve(workerNum);
+	size_t begin = 0;
+	try {
+		for ( size_t workerIdx = 0; workerIdx < workerNum; workerIdx ++ ) {
+			size_t count = primary->sequences.size() / workerNum +
+				(workerIdx < primary->sequences.size() % workerNum ? 1 : 0);
+			workers.emplace_back(generateControlRange, &transitions, control, begin, begin + count);
+			begin += count;
+		}
+	} catch ( ... ) {
+		for ( size_t workerIdx = 0; workerIdx < workers.size(); workerIdx ++ ) workers[workerIdx].join();
+		throw;
+	}
+	for ( size_t workerIdx = 0; workerIdx < workers.size(); workerIdx ++ ) workers[workerIdx].join();
+}
+
 // Store a FASTA sequence
-void storeSequence( const string &name, const string &sequence, Dataset *dataset ) {
+void storeSequence( const string &name, const string &sequence, Dataset *dataset, ControlCounts *controlCounts ) {
 	if ( sequence.empty() ) return;
 
 	string sequenceUpper = sequence;
+	uint32_t context = 0;
+	size_t contextLength = 0;
 	for ( size_t i = 0; i < sequenceUpper.size(); i ++ ) {
 		unsigned char symbol = (unsigned char)sequenceUpper[i];
 		if ( symbol >= 'a' && symbol <= 'z' ) sequenceUpper[i] = (char)(symbol - 'a' + 'A');
+		if ( controlCounts != NULL ) {
+			countControlBase(controlCounts, &context, &contextLength,
+					dataset->symbolMap[(unsigned char)sequenceUpper[i]]);
+		}
 		if ( dataset->symbolMap[(unsigned char)sequenceUpper[i]] < 0 ) {
 			printf( "Unsupported symbol '%c' in sequence %s at position %lu.\n",
 				sequenceUpper[i],
@@ -275,7 +384,8 @@ void storeSequence( const string &name, const string &sequence, Dataset *dataset
 }
 
 // Read a FASTA dataset
-void readFASTA( const string &filename, Dataset *dataset ) {
+void readFASTA( const string &filename, Dataset *dataset, ControlCounts *controlCounts ) {
+	if ( controlCounts != NULL ) *controlCounts = ControlCounts{};
 	ifstream inputFile(filename);
 	if ( inputFile.is_open() == false ) {
 		printf( "File not found: %s\n", filename.c_str() );
@@ -288,7 +398,7 @@ void readFASTA( const string &filename, Dataset *dataset ) {
 	while ( getline(inputFile, line) ) {
 		if ( line.empty() ) continue;
 		if ( line[0] == '>' ) {
-			storeSequence(sequenceName, sequence, dataset);
+			storeSequence(sequenceName, sequence, dataset, controlCounts);
 			sequenceName = line.substr(1);
 			sequence.clear();
 		} else {
@@ -298,7 +408,7 @@ void readFASTA( const string &filename, Dataset *dataset ) {
 			}
 		}
 	}
-	storeSequence(sequenceName, sequence, dataset);
+	storeSequence(sequenceName, sequence, dataset, controlCounts);
 	inputFile.close();
 
 	if ( dataset->sequences.empty() ) {
