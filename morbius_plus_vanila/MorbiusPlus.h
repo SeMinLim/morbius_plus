@@ -24,6 +24,7 @@
 #define DEFAULTMAXSWEEPNUM 20
 #define DEFAULTSCORETHRESHOLD 0.80
 #define DEFAULTSEED 1
+#define DEFAULTCONTROLSEED 1
 #define DEFAULTOUTPUTMOTIFNUM 1
 #define DNAENTROPYMIN 1.20
 
@@ -116,7 +117,7 @@ typedef struct OutputMotif {
 	int pipelineIdx;
 	std::vector<uint32_t> count;
 	std::string consensus;
-	// Populated only by optional post-Gibbs DNA refinement.
+	// Populated by post-Gibbs DNA refinement.
 	bool refined = false;
 	size_t siteNum = 0;
 	std::vector<uint8_t> sitePresent;
@@ -148,6 +149,7 @@ double randomUnit( RandomGenerator *randomGenerator );
 uint32_t randomBounded( RandomGenerator *randomGenerator, uint32_t bound );
 void parseArguments( int argc, char **argv, Config *config );
 void configureAlphabet( int alphabetMode, Dataset *dataset );
+void generateUniformControl( const Dataset *primary, Dataset *control );
 void readFASTA( const std::string &filename, Dataset *dataset );
 void validateWorkload( const Config *config, const Dataset *dataset );
 uint32_t encodeKmer( const std::string &sequence,

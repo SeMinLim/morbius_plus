@@ -125,6 +125,8 @@ static string contextString( size_t code, size_t order ) {
 void writeRefinement( const Config *config, const Dataset *primary, const Dataset *control,
 		const RefinementBackground *background, const vector<RefinementResult> &results,
 		const vector<OutputMotif> &motifs, double elapsedTime ) {
+	string controlSource = config->controlFilename.empty() ?
+		"Generated uniform DNA (in memory)" : config->controlFilename;
 	string filename = config->outputPrefix + ".refinement.tsv";
 	ofstream outputFile = openRefinementFile(filename);
 	outputFile << "Pipeline\tOutputRank\tFitSource\tPrimarySiteNum"
@@ -200,7 +202,7 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 
 	filename = config->outputPrefix + ".refinement_background.tsv";
 	outputFile = openRefinementFile(filename);
-	outputFile << "# Control=" << config->controlFilename << "\n"
+	outputFile << "# Control=" << controlSource << "\n"
 		   << "# DNA Markov order=" << REFINEMENTBACKGROUNDORDER << "; both Control strands; prior 1/4^k per length-k tuple, then conditional normalization\n"
 		   << "Order\tContext\tBase\tLog2ConditionalProbability\tConditionalProbability\n";
 	for ( size_t order = 0; order < background->logProbability.size(); order ++ ) {
@@ -215,7 +217,7 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 	filename = config->outputPrefix + ".refinement_summary.txt";
 	outputFile = openRefinementFile(filename);
 	outputFile << "Method: STREME-inspired post-Gibbs DNA ZOOPS refinement; not an exact STREME implementation.\n"
-		   << "Primary: " << config->inputFilename << "\nControl: " << config->controlFilename << "\n"
+		   << "Primary: " << config->inputFilename << "\nControl: " << controlSource << "\n"
 		   << "Primary sequences: " << primary->sequences.size() << "\nControl sequences: " << control->sequences.size() << "\n"
 		   << "Primary sequence length: " << primary->sequenceLength << "\nControl sequence length: " << control->sequenceLength << "\n"
 		   << "Motif width: " << config->motifLength << "\nCandidate pipelines: " << results.size() << "\n"
@@ -239,6 +241,11 @@ void writeRefinement( const Config *config, const Dataset *primary, const Datase
 		   << "Refinement elapsed seconds: " << elapsedTime << "\n"
 		   << "Program elapsed includes input, seed initialization, Gibbs, and refinement; it stops before motif selection and output. External timing covers the whole process.\n"
 		   << "No reference motifs or Tomtom scores are used in refinement.\n";
+	if ( config->controlFilename.empty() ) {
+		outputFile << "Control generation: uniform independent A/C/G/T with probability 0.25 each; SplitMix64, fixed seed "
+			   << DEFAULTCONTROLSEED << "; low-to-high 2-bit symbols, unused symbols carried across sequences.\n"
+			   << "Control generated once in memory; same sequence counts and lengths as Primary; generation included in program elapsed.\n";
+	}
 	outputFile << "All MEME exports retain uniform letter frequencies for the existing Tomtom evaluation convention; refinement uses the separate Control Markov background.\n";
 	closeRefinementFile(outputFile, filename);
 }

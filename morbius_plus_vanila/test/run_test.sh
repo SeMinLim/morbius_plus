@@ -104,11 +104,19 @@ awk -F '\t' 'NF != 18 { exit 1 } NR > 1 { for (i = 3; i <= NF; i++) if ($i < 0 |
 	"$OUTPUT_DIR/dna_result.initial_offsets.tsv"
 
 grep -q '^Requested Motif Number   : 5$' "$OUTPUT_DIR/dna_result_multiple.summary.txt"
-grep -q '^Reported Motif Number    : 5$' "$OUTPUT_DIR/dna_result_multiple.summary.txt"
-test "$(grep -c '^MOTIF MorbiusPlus_' "$OUTPUT_DIR/dna_result_multiple.meme")" -eq 5
-test "$(grep -c '^>' "$OUTPUT_DIR/dna_result_multiple.fasta")" -eq 160
-test "$(wc -l < "$OUTPUT_DIR/dna_result_multiple.offsets.tsv")" -eq 161
-test "$(wc -l < "$OUTPUT_DIR/dna_result_multiple.pwm.tsv")" -eq 41
+# Refinement can merge candidates or exclude unsupported sites. The output
+# validator reconstructs every retained site and count instead of assuming OOPS.
+python3 - "$OUTPUT_DIR/dna_result_multiple" <<'PY'
+from pathlib import Path
+import re
+import sys
+prefix = sys.argv[1]
+summary = Path(prefix + ".summary.txt").read_text()
+count = int(re.search(r"Reported Motif Number\s+: (\d+)", summary).group(1))
+assert 1 <= count <= 5
+assert len(re.findall(r"^MOTIF ", Path(prefix + ".meme").read_text(), re.M)) == count
+assert len(Path(prefix + ".pwm.tsv").read_text().splitlines()) == 1 + 8 * count
+PY
 
 tail -n +2 "$OUTPUT_DIR/dna_result.offsets.tsv" > "$OUTPUT_DIR/dna_result.offsets.data.txt"
 awk -F '\t' 'NR > 1 && $1 == 1 { print $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 }' \
@@ -181,5 +189,12 @@ python3 "$ROOT_DIR/test/validate_strand_outputs.py" "$ROOT_DIR/test/DNA_BOTH_STR
 "$OUTPUT_DIR/refinement_test" > "$OUTPUT_DIR/refinement_test.stdout.txt"
 python3 "$ROOT_DIR/test/validate_refinement_outputs.py" "$ROOT_DIR/morbius_plus_vanila" \
 	"$OUTPUT_DIR/refinement"
+
+"${CXX:-g++}" -O2 -std=c++17 -Wall -Wextra -pedantic -pthread \
+	-I "$ROOT_DIR" "$ROOT_DIR/test/uniform_control_test.cpp" "$ROOT_DIR/Utility.cpp" \
+	-o "$OUTPUT_DIR/uniform_control_test"
+"$OUTPUT_DIR/uniform_control_test" > "$OUTPUT_DIR/uniform_control_test.stdout.txt"
+python3 "$ROOT_DIR/test/validate_uniform_control.py" "$ROOT_DIR/morbius_plus_vanila" \
+	"$OUTPUT_DIR/uniform_control"
 
 printf "All Morbius+ vanilla tests passed.\n"

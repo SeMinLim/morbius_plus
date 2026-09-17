@@ -29,10 +29,14 @@ int main( int argc, char **argv ) {
 	readFASTA(config.inputFilename, &dataset);
 	validateWorkload(&config, &dataset);
 	Dataset control;
-	bool refinementEnabled = config.controlFilename.empty() == false;
+	bool refinementEnabled = config.alphabetMode == ALPHABET_DNA;
 	if ( refinementEnabled ) {
-		configureAlphabet(config.alphabetMode, &control);
-		readFASTA(config.controlFilename, &control);
+		if ( config.controlFilename.empty() ) {
+			generateUniformControl(&dataset, &control);
+		} else {
+			configureAlphabet(config.alphabetMode, &control);
+			readFASTA(config.controlFilename, &control);
+		}
 		validateWorkload(&config, &control);
 		if ( control.sequenceLength != dataset.sequenceLength ) {
 			fprintf(stderr, "Fisher refinement requires the same sequence length in Primary and Control.\n");
@@ -91,7 +95,7 @@ int main( int argc, char **argv ) {
 		refinementElapsedTime = timeChecker() - refinementStartTime;
 	}
 	// Stop before motif selection and all result-file output.
-	// Refinement-enabled runs include input reading; other runs retain seed + Gibbs timing.
+	// DNA includes input reading and any Control generation; protein retains seed + Gibbs timing.
 	double elapsedTime = refinementEnabled ? timeChecker() - programStartTime :
 		seedElapsedTime + processElapsedTime;
 

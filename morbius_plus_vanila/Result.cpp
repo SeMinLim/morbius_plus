@@ -344,7 +344,7 @@ void writePWM( const Config *config,
 		printf( "Unable to create output file: %s\n", filename.c_str() );
 		exit(1);
 	}
-	if ( config->controlFilename.empty() == false ) outputFile << setprecision(17);
+	if ( config->alphabetMode == ALPHABET_DNA ) outputFile << setprecision(17);
 
 	if ( config->outputMotifNum == 1 ) {
 		outputFile << "Position";
@@ -408,7 +408,7 @@ void writeMEME( const Config *config,
 		printf( "Unable to create output file: %s\n", filename.c_str() );
 		exit(1);
 	}
-	if ( config->controlFilename.empty() == false ) outputFile << setprecision(17);
+	if ( config->alphabetMode == ALPHABET_DNA ) outputFile << setprecision(17);
 
 	outputFile << "MEME version 4\n\n";
 	outputFile << "ALPHABET= " << dataset->alphabet << "\n\n";
@@ -479,8 +479,13 @@ void writeSummary( const Config *config,
 		}
 	}
 	outputFile << "Pipeline Number          : " << NUMPIPELINE << "\n";
-	if ( config->controlFilename.empty() == false ) {
+	if ( config->alphabetMode == ALPHABET_DNA ) {
 		outputFile << "Refinement               : Separate post-Gibbs Primary/Control enrichment\n";
+		if ( config->controlFilename.empty() ) {
+			outputFile << "Control Source           : Generated uniform DNA in memory; A/C/G/T probability 0.25 each\n";
+			outputFile << "Control Generator        : SplitMix64, fixed seed " << DEFAULTCONTROLSEED << "\n";
+			outputFile << "Control Generation Time  : Included in elapsed time\n";
+		}
 		outputFile << "Best Score Meaning       : Original Gibbs agreement score (all Primary sequences)\n";
 		outputFile << "Elapsed Time Includes    : Input, seed initialization, Gibbs, and refinement (before motif selection and output)\n";
 	}
@@ -559,8 +564,11 @@ void printResult( const Config *config,
 			printf( "Selected Seed          : None\n" );
 		}
 	}
-	if ( config->controlFilename.empty() == false ) {
+	if ( config->alphabetMode == ALPHABET_DNA ) {
 		printf( "Refinement             : Separate post-Gibbs Primary/Control enrichment\n" );
+		if ( config->controlFilename.empty() ) {
+			printf( "Control Source         : Generated uniform DNA in memory (fixed seed %d)\n", DEFAULTCONTROLSEED );
+		}
 		printf( "Best Score Meaning     : Original Gibbs agreement score (all Primary sequences)\n" );
 	}
 	if ( config->outputMotifNum == 1 && outputMotifs.empty() == false ) {

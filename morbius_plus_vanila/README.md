@@ -60,11 +60,11 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
 - `--motif-count <N>`: number of top unique motifs to output (default: `1`)
 - `--max-updates <N>`: maximum sequence updates per pipeline
 - `--score-threshold <F>`: normalized Overall Consensus Agreement Score threshold in `[0, 1]`
-- `--seed <N>`: random seed
+- `--seed <N>`: Gibbs random seed (does not change generated Control)
 - `--threads <N>`: number of concurrent CPU threads
-- `--control <FASTA>`: enable the DNA refinement described below
+- `--control <FASTA>`: supply external DNA Control; otherwise generate uniform DNA Control in memory
 
-## Optional DNA refinement
+## DNA Control and refinement
 
 ```bash
 ./morbius_plus_vanila \
@@ -74,13 +74,33 @@ All input sequences must have the same length. DNA accepts `A`, `C`, `G`, and `T
     --score-threshold 0.80 --seed 1
 ```
 
-This is a separate, STREME-inspired refinement of the completed Gibbs candidates.
-It does not add an absent-site state to the Gibbs sampler. Enabling refinement
+DNA always uses a separate, STREME-inspired refinement of the completed Gibbs candidates.
+It does not add an absent-site state to the Gibbs sampler. Refinement
 does not change the shared seed and anchor, initial offsets, per-pipeline RNG
 streams, forward-only sampling, agreement score or termination rules. The default Gibbs agreement threshold is
-still **0.80**. Without `--control`, the existing DNA and protein behavior is
-preserved. Control-based refinement currently requires DNA and the same fixed
-sequence length in Primary and Control; their sequence counts may differ.
+still **0.80**. Protein behavior is unchanged and does not use Control or refinement.
+External Control must have the same fixed sequence length as Primary; their
+sequence counts may differ. An unreadable or invalid supplied Control is an error
+and does not trigger automatic generation.
+
+When `--control` is omitted for DNA, one uniform random Control dataset is
+generated in memory with the same sequence count and each sequence length as
+Primary. A local SplitMix64 state starts from the fixed `DEFAULTCONTROLSEED=1`,
+independently of the Gibbs seed and thread count. Each 64-bit word supplies up to
+32 bases, consuming low-to-high 2-bit symbols: `00=A`, `01=C`, `10=G`, `11=T`.
+Unused symbols carry across sequence boundaries. This gives each base probability
+0.25, without forcing exact 25% sample counts or preserving Primary GC/k-mer
+frequencies. Generation performs no frequency estimation, transition modeling or
+shuffling. The dataset is generated once and shared by all refinement candidates
+and iterations; no intermediate Control FASTA is written or read. Supplying
+`--control` skips this generator entirely. Summaries record the generated source
+and fixed seed for reproduction.
+
+Only Control generation uses this uniform order-zero model. The existing
+second-order refinement background is still estimated once from the resulting
+Control dataset, just as for external Control. Composition differences between
+Primary and uniform Control can be scored as enrichment; this fallback does not
+preserve biological background statistics or guarantee the same motif quality.
 
 The following operations are applied to every pipeline candidate before output
 ranking, deduplication or the `--motif-count` limit:
@@ -171,11 +191,12 @@ The method follows the sequence-level enrichment principle of
 [STREME refinement](https://meme-suite.org/meme/doc/streme.html), while retaining
 Morbius+'s pseudocount 1, pipeline candidates and output ranking; it is not a
 reimplementation of all STREME estimation and search procedures. Refinement adds
-background construction, repeated scanning and output work. With `--control`,
+background construction, repeated scanning and output work. For DNA,
 the reported elapsed time starts at program entry and ends immediately after
-refinement, including input reading, seed initialization, Gibbs and refinement.
+refinement, including input reading, any automatic Control generation, seed
+initialization, Gibbs and refinement.
 Motif selection, result-file output and final summary/console writes are excluded.
-Without `--control`, elapsed time retains the seed initialization plus Gibbs interval.
+For protein, elapsed time retains the seed initialization plus Gibbs interval.
 For a complete end-to-end benchmark, measure the whole process externally.
 Tomtom evaluation is a separate process and is excluded.
 

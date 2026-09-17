@@ -87,16 +87,17 @@ void printUsage( const char *programName ) {
 	printf( "Usage: %s --input <FASTA> --output <PREFIX> --alphabet <dna|protein> --motif-length <N> [Options]\n", programName );
 	printf( "\n" );
 	printf( "Options:\n" );
-	printf( "  --control <FASTA>     Enable post-Gibbs DNA ZOOPS refinement with matched-length Control\n" );
+	printf( "  --control <FASTA>      DNA Control input; omit to generate uniform DNA Control in memory\n" );
 	printf( "  --motif-count <N>      Top unique motifs to output [default: %d; at most %d available]\n",
 		DEFAULTOUTPUTMOTIFNUM,
 		NUMPIPELINE
 	);
 	printf( "  --max-updates <N>      Maximum updates per pipeline [default: %d x sequence count]\n", DEFAULTMAXSWEEPNUM );
 	printf( "  --score-threshold <F>  Normalized agreement threshold in [0, 1] [default: %.2f]\n", DEFAULTSCORETHRESHOLD );
-	printf( "  --seed <N>             Random seed [default: %d]\n", DEFAULTSEED );
+	printf( "  --seed <N>             Gibbs random seed [default: %d]\n", DEFAULTSEED );
 	printf( "  --threads <N>          Concurrent CPU threads [default: %d]\n", NUMPIPELINE );
 	printf( "  --help                 Print this message\n" );
+	printf( "DNA refinement uses supplied Control or generated A/C/G/T Control (25%% each, fixed seed %d).\n", DEFAULTCONTROLSEED );
 }
 
 // Parse an unsigned integer
@@ -209,6 +210,35 @@ void configureAlphabet( int alphabetMode, Dataset *dataset ) {
 	for ( int i = 0; i < dataset->alphabetSize; i ++ ) {
 		unsigned char symbol = (unsigned char)dataset->alphabet[i];
 		dataset->symbolMap[symbol] = i;
+	}
+}
+
+// Generate uniform DNA Control once, with RNG state separate from every Gibbs pipeline.
+void generateUniformControl( const Dataset *primary, Dataset *control ) {
+	configureAlphabet(ALPHABET_DNA, control);
+	control->sequenceLength = primary->sequenceLength;
+	control->names = primary->names;
+	control->sequences.resize(primary->sequences.size());
+	uint64_t state = DEFAULTCONTROLSEED;
+	uint64_t word = 0;
+	size_t available = 0;
+	for ( size_t seqIdx = 0; seqIdx < primary->sequences.size(); seqIdx ++ ) {
+		string &sequence = control->sequences[seqIdx];
+		sequence.resize(primary->sequences[seqIdx].size());
+		size_t position = 0;
+		while ( position < sequence.size() ) {
+			if ( available == 0 ) {
+				word = splitMix64(&state);
+				available = 32;
+			}
+			size_t count = sequence.size() - position;
+			if ( count > available ) count = available;
+			for ( size_t idx = 0; idx < count; idx ++ ) {
+				sequence[position++] = "ACGT"[word & 3U];
+				word >>= 2;
+			}
+			available -= count;
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-"""Reconstruct emitted DNA matrices from original-coordinate, forward sites."""
+"""Reconstruct DNA output, including refined membership, from forward sites."""
 import csv
 import io
 from pathlib import Path
@@ -44,10 +44,23 @@ for row, (header, site) in zip(rows, emitted):
     strands.setdefault(rank, set()).add(strand)
 
 matrices = {}
+refinement = Path(prefix + ".refinement.tsv")
+refined_sites = {}
+if refinement.exists():
+    with refinement.open() as handle:
+        selected = {int(row["OutputRank"]): int(row["Pipeline"])
+                    for row in csv.DictReader(handle, delimiter="\t") if row["OutputRank"] != "unreported"}
+    with open(prefix + ".refinement_sites.tsv") as handle:
+        for row in csv.DictReader(handle, delimiter="\t"):
+            if row["SitePresent"] == "1":
+                refined_sites.setdefault(int(row["Pipeline"]), []).append(int(row["SequenceIdx"]))
+    assert set(selected) == set(sites)
 for rank, motif_sites in sites.items():
-    assert sorted(sequence_indices[rank]) == list(range(len(source)))
+    assert len(set(sequence_indices[rank])) == len(sequence_indices[rank])
+    expected_indices = refined_sites[selected[rank]] if refinement.exists() else list(range(len(source)))
+    assert sorted(sequence_indices[rank]) == expected_indices
     matrices[rank] = [
-        [(sum(site[column] == base for site in motif_sites) + 1) / (len(source) + 4)
+        [(sum(site[column] == base for site in motif_sites) + 1) / (len(motif_sites) + 4)
          for base in "ACGT"]
         for column in range(len(motif_sites[0]))
     ]
@@ -69,7 +82,7 @@ for rank, block in enumerate(blocks, 1):
     for actual_row, expected in zip(actual, matrices[rank]):
         assert len(actual_row) == 4
         assert all(abs(a - b) < 1e-6 for a, b in zip(actual_row, expected))
-assert all(int(value) == len(source) for value in re.findall(r"nsites= (\d+)", meme))
+assert list(map(int, re.findall(r"nsites= (\d+)", meme))) == [len(sites[rank]) for rank in sorted(sites)]
 
 summary = Path(prefix + ".summary.txt").read_text()
 table = summary.split("[All Pipelines]\n", 1)[1].split("\n\n", 1)[0]
@@ -85,7 +98,8 @@ for row in pipelines:
 
 if "--exact-pair" in sys.argv:
     assert all(orientations == {"+"} for orientations in strands.values())
-    assert all(motif_sites == [sequence for _, sequence in source] for motif_sites in sites.values())
+    for rank, motif_sites in sites.items():
+        assert motif_sites == [source[index][1] for index in sequence_indices[rank]]
     assert all(row["ThresholdReached"] == "No" for row in pipelines)
     assert all(int(row["BestScore"]) == 14 for row in pipelines)
 print("Validated forward FASTA, offsets, PWM/MEME, and all pipeline stop reasons:", prefix)
