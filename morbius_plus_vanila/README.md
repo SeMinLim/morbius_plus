@@ -104,7 +104,7 @@ ranking, deduplication or the `--motif-count` limit:
 5. Rescan the proposed PWM and optimize its enrichment cutoff again. Accept it
    only if its enrichment p-value strictly improves the current best PWM. Rescan
    all sequences on each iteration, allowing previously excluded sequences to
-   return. Stop on non-improvement, lack of support, or 5 proposals.
+   return. Stop on non-improvement, lack of support, or 3 proposals.
 
 Refinement candidates run independently within the existing `--threads` budget
 (default: 16, capped at 16 and the candidate count). Workers take the next
@@ -123,8 +123,8 @@ Cache construction is included in the existing refinement timer.
 A proposed PWM that is exactly equal to the current PWM skips the redundant
 rescan and stops with the existing `no_improvement` reason and proposal count.
 There is no approximate equality threshold or candidate pruning. All 16
-candidates remain eligible, with a maximum of **5 proposals** per candidate.
-Including the initial PWM evaluation, each candidate requires at most **6 full
+candidates remain eligible, with a maximum of **3 proposals** per candidate.
+Including the initial PWM evaluation, each candidate requires at most **4 full
 Primary/Control evaluations**. Every changed proposed PWM is evaluated before
 it can be accepted; only strict enrichment improvement is retained.
 

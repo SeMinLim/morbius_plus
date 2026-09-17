@@ -3,7 +3,7 @@
 
 #include "MorbiusPlus.h"
 
-#define REFINEMENTMAXITERATIONS 5
+#define REFINEMENTMAXITERATIONS 3
 #define REFINEMENTBACKGROUNDORDER 2
 
 typedef struct RefinementBackground {
